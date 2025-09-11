@@ -70,6 +70,7 @@ export function TopUpWallet({ onSuccess }: TopUpWalletProps) {
           type: 'wallet_topup',
           originalAmount: topUpAmount
         }
+        feeBearer: "merchant"
       };
 
       console.log('🚀 Initiating wallet top-up...', paymentData);
