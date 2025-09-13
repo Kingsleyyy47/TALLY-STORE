@@ -64,13 +64,13 @@ export function TopUpWallet({ onSuccess }: TopUpWalletProps) {
         customerEmail: user.email,
         redirectUrl: `${window.location.origin}/wallet`, // Redirect back to wallet after payment
         description: `Wallet top-up of ₦${topUpAmount.toLocaleString()}`,
+        feeBearer: "merchant",
         metadata: {
           user_id: user.id, // Use user_id to match webhook payload structure
           userId: user.id,  // Keep userId for backward compatibility
           type: 'wallet_topup',
           originalAmount: topUpAmount
-        },
-        feeBearer: "merchant"
+        }
       };
 
       console.log('🚀 Initiating wallet top-up...', paymentData);
