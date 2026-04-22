@@ -19,22 +19,13 @@ interface AdminWallet {
   network: string
 }
 
-const cryptoNetworks = [
-  { id: 'trc20', label: 'TRC20 (TRON)', fee: 'Low fees (~$1)' },
-  { id: 'bep20', label: 'BEP20 (BSC)', fee: 'Low fees (~$0.30)' },
-  { id: 'erc20', label: 'ERC20 (Ethereum)', fee: 'High fees (~$5-20)' },
-]
-
 export default function AddFunds() {
   const { user } = useAuth()
   const navigate = useNavigate()
   const [amount, setAmount] = useState('')
-  const [step, setStep] = useState<'amount' | 'payment' | 'crypto'>('amount')
+  const [step, setStep] = useState<'amount' | 'payment'>('amount')
   const [showBankModal, setShowBankModal] = useState(false)
-  const [selectedNetwork, setSelectedNetwork] = useState('trc20')
   const [copied, setCopied] = useState(false)
-  const [screenshot, setScreenshot] = useState<File | null>(null)
-  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null)
   const [submitted, setSubmitted] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -42,8 +33,6 @@ export default function AddFunds() {
   // Real data state
   const [recentDeposits, setRecentDeposits] = useState<Deposit[]>([])
   const [adminWalletAddress, setAdminWalletAddress] = useState('Loading...')
-  const [korapayActive, setKorapayActive] = useState(true)
-  const [cryptoActive, setCryptoActive] = useState(true)
   const [pocketfiActive, setPocketfiActive] = useState(true)
   const [loadingInit, setLoadingInit] = useState(true)
   const [initiatingPayment, setInitiatingPayment] = useState(false)
@@ -70,11 +59,7 @@ export default function AddFunds() {
         // Payment methods — check which are active
         if (methodsRes.data?.success) {
           const methods = methodsRes.data.payments || []
-          const kora = methods.find((m: Record<string, unknown>) => String(m.name).toLowerCase().includes('kora'))
-          const btc = methods.find((m: Record<string, unknown>) => String(m.name).toLowerCase() === 'btc' || String(m.name).toLowerCase().includes('crypto'))
           const pf = methods.find((m: Record<string, unknown>) => String(m.name).toLowerCase() === 'pocketfi')
-          setKorapayActive(kora?.status === 'active')
-          setCryptoActive(btc?.status === 'active')
           setPocketfiActive(pf?.status === 'active')
         }
 
@@ -176,114 +161,6 @@ export default function AddFunds() {
     }, 5000) // check every 5s
     return () => { clearInterval(interval); setPollingDeposit(false) }
   }, [showBankModal, bankAccount, submitted, checkForNewDeposit])
-
-  // Korapay payment initiation — Inline popup (avoids redirect/refresh issues)
-  async function handleKorapayPay() {
-    if (!amount || Number(amount) < 100) {
-      setErrorMsg('Minimum amount is ₦100')
-      return
-    }
-    setInitiatingPayment(true)
-    setErrorMsg('')
-    try {
-      // Generate unique reference client-side
-      const randomHex = Array.from(crypto.getRandomValues(new Uint8Array(4)))
-        .map(b => b.toString(16).padStart(2, '0')).join('')
-      const reference = `KP_${Date.now()}_${randomHex}`
-
-      const korapay = (window as unknown as Record<string, unknown>).Korapay as {
-        initialize: (config: Record<string, unknown>) => void
-      } | undefined
-
-      if (!korapay) {
-        setErrorMsg('Payment SDK not loaded. Please refresh and try again.')
-        return
-      }
-
-      korapay.initialize({
-        key: 'pk_live_tbRMaH9CAsorBApYwiPGHPo7bUrma7naBaJz6Poi',
-        reference,
-        amount: Number(amount),
-        currency: 'NGN',
-        customer: {
-          name: user?.user_metadata?.username || 'Customer',
-          email: user?.email || '',
-        },
-        narration: 'Wallet Top Up',
-        channels: ['card', 'bank_transfer', 'pay_with_bank'],
-        default_channel: 'bank_transfer',
-        merchant_bears_cost: true,
-        notification_url: `${import.meta.env.VITE_SUPABASE_URL || 'https://dvvttcbpberdptsehurh.supabase.co'}/functions/v1/korapay-webhook`,
-        onClose: () => {
-          setInitiatingPayment(false)
-        },
-        onSuccess: () => {
-          // Navigate to processing page to verify & credit
-          navigate(`/dashboard/payment-processing?ref=${reference}&provider=korapay`)
-        },
-        onFailed: () => {
-          setErrorMsg('Payment failed. Please try again.')
-          setInitiatingPayment(false)
-        },
-      })
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Payment initialization failed')
-    } finally {
-      setInitiatingPayment(false)
-    }
-  }
-
-  function copyAddress() {
-    navigator.clipboard.writeText(adminWalletAddress)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
-
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (file) {
-      setScreenshot(file)
-      const reader = new FileReader()
-      reader.onload = () => setScreenshotPreview(reader.result as string)
-      reader.readAsDataURL(file)
-    }
-  }
-
-  function removeScreenshot() {
-    setScreenshot(null)
-    setScreenshotPreview(null)
-    if (fileInputRef.current) fileInputRef.current.value = ''
-  }
-
-  function handleSubmitCrypto() {
-    if (!screenshot) return
-    setSubmitting(true)
-    setErrorMsg('')
-
-    // Create a crypto deposit record
-    supabase.functions.invoke('deposits', {
-      body: {
-        amount: Number(amount),
-        method: 'crypto',
-        transactionRef: `CRYPTO-${selectedNetwork.toUpperCase()}-${Date.now()}`,
-      },
-    }).then(({ data, error }) => {
-      if (error || !data?.success) {
-        setErrorMsg(data?.message || 'Failed to submit deposit')
-        setSubmitting(false)
-        return
-      }
-      setSubmitted(true)
-      setSubmitting(false)
-      // Refresh deposits list
-      supabase.functions.invoke('deposits', { method: 'GET' }).then(({ data: dData }) => {
-        if (dData?.success) setRecentDeposits((dData.deposits || []).slice(0, 5))
-      })
-    }).catch(() => {
-      setErrorMsg('Failed to submit deposit')
-      setSubmitting(false)
-    })
-  }
 
   return (
     <div className="space-y-6 animate-[fadeSlideUp_0.5s_ease-out]">
