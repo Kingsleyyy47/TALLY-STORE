@@ -94,17 +94,27 @@ export default function AddFunds() {
     setLoadingBankAccount(true)
     setErrorMsg('')
     try {
-      const { data, error } = await supabase.functions.invoke('pocketfi', {
-        body: { action: 'get-or-create-account' },
-      })
-      if (error || !data?.success) {
-        setErrorMsg(data?.error || 'Failed to get bank account — try again')
-        setLoadingBankAccount(false)
-        return
-      }
-      setBankAccount(data.account)
-      bankStepEnteredAt.current = new Date() // mark exact moment user sees the bank details
-      setShowBankModal(true)
+     const res = await fetch('/api/pocketfi-account', {
+       method: 'POST',
+       headers: {
+         'Content-Type': 'application/json',
+       },
+       body: JSON.stringify({
+         userId: user.id,
+         email: user.email,
+         username: user.user_metadata?.username || 'User',
+       }),
+     })
+
+     const data = await res.json()
+
+     if (!data.success) {
+       setErrorMsg('Failed to get bank account')
+       return
+     }
+
+     setBankAccount(data.account)
+     setShowBankModal(true)
     } catch {
       setErrorMsg('Failed to connect to payment service')
     } finally {
