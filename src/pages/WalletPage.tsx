@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -23,6 +24,7 @@ import { getUserTransactions } from '@/lib/supabase'
 
 export default function WalletPage() {
   const { user, walletBalance, refreshWalletBalance } = useAuth()
+  const navigate = useNavigate()
   const { toast } = useToast()
   const [transactions, setTransactions] = useState<any[]>([])
   const [isLoadingTransactions, setIsLoadingTransactions] = useState(false)
@@ -193,6 +195,14 @@ export default function WalletPage() {
                         description: "Your wallet balance has been updated successfully!",
                       });
                     }} />
+                    
+                    <button
+                        onClick={() => navigate('/dashboard/funds')}
+                        className="mt-4 px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition-all"
+                      >
+                        Bank Transfer (PocketFi)
+                      </button>
+                    
                     <p className="text-sm text-muted-foreground mt-4 text-center">
                       🔒 Secure payments powered by Ercas Pay<br />
                       Supports Cards, Bank Transfer, USSD & QR Code
