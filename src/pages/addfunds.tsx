@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Wallet, Play, ArrowDownRight, ArrowLeft, ChevronRight, CreditCard, Bitcoin, Copy, Check, Upload, X, Loader2, Building2, RefreshCw } from 'lucide-react'
+import { Wallet, Play, ArrowDownRight, ArrowLeft, Copy, Check, Upload, X, Loader2, Building2, RefreshCw } from 'lucide-react'
 import { useAuth } from '../hooks/useAuth'
 import { supabase } from '../lib/supabase'
 
@@ -27,15 +27,11 @@ export default function AddFunds() {
   const [showBankModal, setShowBankModal] = useState(false)
   const [copied, setCopied] = useState(false)
   const [submitted, setSubmitted] = useState(false)
-  const [submitting, setSubmitting] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Real data state
   const [recentDeposits, setRecentDeposits] = useState<Deposit[]>([])
-  const [adminWalletAddress, setAdminWalletAddress] = useState('Loading...')
   const [pocketfiActive, setPocketfiActive] = useState(true)
   const [loadingInit, setLoadingInit] = useState(true)
-  const [initiatingPayment, setInitiatingPayment] = useState(false)
   const [errorMsg, setErrorMsg] = useState('')
 
   // PocketFi bank transfer state
@@ -234,22 +230,6 @@ export default function AddFunds() {
 
           <h3 className="font-bold text-gray-900 dark:text-white mb-4">Choose Provider</h3>
           <div className="space-y-3">
-            {korapayActive && (
-            <button
-              onClick={handleKorapayPay}
-              disabled={initiatingPayment}
-              className="w-full flex items-center gap-4 p-4 rounded-2xl border-2 border-primary-200 dark:border-primary-800/50 bg-primary-50/30 dark:bg-primary-900/10 hover:bg-primary-50 dark:hover:bg-primary-900/20 transition-all group disabled:opacity-50"
-            >
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-primary-500 to-indigo-600 flex items-center justify-center shadow-md">
-                {initiatingPayment ? <Loader2 size={20} className="text-white animate-spin" /> : <CreditCard size={20} className="text-white" />}
-              </div>
-              <div className="flex-1 text-left">
-                <p className="text-sm font-bold text-gray-900 dark:text-white">Korapay</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">{initiatingPayment ? 'Initializing...' : 'Card or Bank Transfer'}</p>
-              </div>
-              <span className="text-[10px] font-bold bg-emerald-500 text-white px-3 py-1 rounded-full shadow-sm">Instant</span>
-            </button>
-            )}
 
             {/* Bank Transfer (Paga) */}
             {pocketfiActive && (
@@ -268,20 +248,7 @@ export default function AddFunds() {
               <span className="text-[10px] font-bold bg-emerald-500 text-white px-3 py-1 rounded-full shadow-sm">Auto</span>
             </button>
             )}
-
-            {cryptoActive && (
-            <button className="w-full flex items-center gap-4 p-4 rounded-2xl border border-gray-200 dark:border-gray-600/50 hover:border-gray-300 dark:hover:border-gray-500/50 hover:bg-gray-50 dark:hover:bg-gray-700/20 transition-all group" onClick={() => setStep('crypto')}>
-              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-orange-400 to-amber-500 flex items-center justify-center shadow-md">
-                <Bitcoin size={20} className="text-white" />
-              </div>
-              <div className="flex-1 text-left">
-                <p className="text-sm font-bold text-gray-900 dark:text-white">Crypto (USDT)</p>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Pay with cryptocurrency</p>
-              </div>
-              <span className="text-[10px] font-medium text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-600 px-2.5 py-1 rounded-full">Manual</span>
-              <ChevronRight size={16} className="text-gray-300 dark:text-gray-600" />
-            </button>
-            )}
+            
           </div>
 
           {errorMsg && (
@@ -289,125 +256,6 @@ export default function AddFunds() {
               {errorMsg}
             </div>
           )}
-        </div>
-      )}
-
-      {/* Step 3: Crypto Payment */}
-      {step === 'crypto' && !submitted && (
-        <div className="bg-white dark:bg-gray-800/80 backdrop-blur-sm border border-gray-100 dark:border-gray-700/30 rounded-3xl p-6 sm:p-8 shadow-sm animate-[fadeSlideUp_0.3s_ease-out]">
-          <button onClick={() => setStep('payment')} className="flex items-center gap-2 text-sm font-semibold text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white mb-5 transition-colors">
-            <ArrowLeft size={18} />
-            Back to Payment Methods
-          </button>
-
-          <div className="bg-gray-50 dark:bg-gray-700/30 rounded-2xl px-5 py-4 flex items-center justify-between mb-6">
-            <span className="text-sm text-gray-500 dark:text-gray-400">Amount</span>
-            <span className="text-lg font-bold text-gray-900 dark:text-white">₦{Number(amount).toLocaleString()}</span>
-          </div>
-
-          {/* Network selector */}
-          <h3 className="font-bold text-gray-900 dark:text-white mb-3">Select Network</h3>
-          <div className="space-y-2 mb-6">
-            {cryptoNetworks.map((net) => (
-              <button
-                key={net.id}
-                onClick={() => setSelectedNetwork(net.id)}
-                className={`w-full flex items-center gap-3 p-3 rounded-xl border-2 transition-all ${
-                  selectedNetwork === net.id
-                    ? 'border-primary-500 bg-primary-50/30 dark:bg-primary-900/10'
-                    : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
-                }`}
-              >
-                <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                  selectedNetwork === net.id ? 'border-primary-500' : 'border-gray-300 dark:border-gray-600'
-                }`}>
-                  {selectedNetwork === net.id && <div className="w-2 h-2 rounded-full bg-primary-500" />}
-                </div>
-                <div className="text-left flex-1">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white">{net.label}</p>
-                  <p className="text-[10px] text-gray-400 dark:text-gray-500">{net.fee}</p>
-                </div>
-              </button>
-            ))}
-          </div>
-
-          {/* Wallet address */}
-          <h3 className="font-bold text-gray-900 dark:text-white mb-3">Send USDT to this address</h3>
-          <div className="bg-gray-50 dark:bg-gray-700/30 rounded-xl p-4 flex items-center gap-3 mb-2">
-            <code className="flex-1 text-xs font-mono text-gray-700 dark:text-gray-300 break-all">{adminWalletAddress}</code>
-            <button
-              onClick={copyAddress}
-              className="shrink-0 p-2 rounded-lg bg-primary-50 dark:bg-primary-900/20 text-primary-600 dark:text-primary-400 hover:bg-primary-100 dark:hover:bg-primary-900/30 transition-all"
-            >
-              {copied ? <Check size={16} /> : <Copy size={16} />}
-            </button>
-          </div>
-          <p className="text-[10px] text-amber-600 dark:text-amber-400 mb-6">⚠️ Only send USDT on the selected network. Sending other tokens may result in permanent loss.</p>
-
-          {/* Screenshot upload */}
-          <h3 className="font-bold text-gray-900 dark:text-white mb-3">Upload Payment Screenshot</h3>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="image/*"
-            onChange={handleFileChange}
-            className="hidden"
-          />
-
-          {screenshotPreview ? (
-            <div className="relative mb-6">
-              <img src={screenshotPreview} alt="Screenshot" className="w-full max-h-48 object-contain rounded-xl border border-gray-200 dark:border-gray-700" />
-              <button
-                onClick={removeScreenshot}
-                className="absolute top-2 right-2 p-1.5 rounded-full bg-red-500 text-white shadow-lg hover:bg-red-600 transition-colors"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => fileInputRef.current?.click()}
-              className="w-full py-8 rounded-2xl border-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-primary-400 dark:hover:border-primary-600 flex flex-col items-center gap-2 text-gray-400 dark:text-gray-500 hover:text-primary-500 transition-all mb-6"
-            >
-              <Upload size={24} />
-              <span className="text-xs font-medium">Click to upload screenshot</span>
-              <span className="text-[10px]">PNG, JPG up to 5MB</span>
-            </button>
-          )}
-
-          {errorMsg && (
-            <div className="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/40 text-sm text-red-600 dark:text-red-400">
-              {errorMsg}
-            </div>
-          )}
-
-          <button
-            onClick={handleSubmitCrypto}
-            disabled={!screenshot || submitting}
-            className="w-full py-3.5 rounded-2xl font-bold text-white bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 shadow-lg shadow-orange-500/20 hover:shadow-xl hover:-translate-y-0.5 active:scale-[0.98] transition-all duration-300 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:translate-y-0 flex items-center justify-center gap-2"
-          >
-            {submitting && <Loader2 size={18} className="animate-spin" />}
-            {submitting ? 'Submitting...' : 'Submit for Review'}
-          </button>
-        </div>
-      )}
-
-      {/* Crypto submitted confirmation */}
-      {step === 'crypto' && submitted && (
-        <div className="bg-white dark:bg-gray-800/80 backdrop-blur-sm border border-gray-100 dark:border-gray-700/30 rounded-3xl p-8 sm:p-10 text-center shadow-sm animate-[fadeSlideUp_0.3s_ease-out]">
-          <div className="w-16 h-16 mx-auto mb-5 bg-amber-100 dark:bg-amber-900/30 rounded-2xl flex items-center justify-center">
-            <Bitcoin size={32} className="text-amber-600 dark:text-amber-400" />
-          </div>
-          <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-2">Payment Under Review</h2>
-          <p className="text-sm text-gray-500 dark:text-gray-400 leading-relaxed mb-6">
-            Your crypto deposit of <span className="font-bold">₦{Number(amount).toLocaleString()}</span> is being reviewed. This usually takes 5–30 minutes during working hours.
-          </p>
-          <button
-            onClick={() => { setStep('amount'); setAmount(''); setSubmitted(false); setScreenshot(null); setScreenshotPreview(null) }}
-            className="px-6 py-2.5 rounded-xl bg-primary-600 hover:bg-primary-700 text-white font-semibold text-sm transition-all shadow-lg shadow-primary-600/25 hover:shadow-xl hover:-translate-y-0.5"
-          >
-            Back to Add Funds
-          </button>
         </div>
       )}
 
