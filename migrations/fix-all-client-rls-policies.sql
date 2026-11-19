@@ -1,0 +1,5 @@
+-- Retired manual SQL Editor repair script. Intentionally no-op.
+-- The former version granted public reads of app settings and chat analytics,
+-- browser writes to visit/CRO evidence, and updates to any chat session.
+-- Use the reviewed, ordered supabase/migrations instead. In particular,
+-- 20260924013000 closes the old policies if this script was run previously.

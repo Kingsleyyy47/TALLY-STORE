@@ -1,19 +1,31 @@
 import { Link } from 'react-router-dom'
+import { useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { BackToHome } from '@/components/ui/back-button'
+import NavbarAuth from '@/components/NavbarAuth'
+import Footer from '@/components/Footer'
+import { trackRevenueEvent } from '@/lib/revenue-os'
 
 const PrivacyPage = () => {
+  useEffect(() => {
+    trackRevenueEvent({
+      eventType: 'PAGE_VIEWED',
+      surface: 'privacy',
+    })
+  }, [])
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
-      <div className="container mx-auto px-4 max-w-4xl">
+    <div className="min-h-screen bg-background">
+      <NavbarAuth />
+      <main className="mx-auto max-w-4xl px-4 pb-16 pt-8 sm:px-6">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-4">
+          <h1 className="text-4xl font-black tracking-normal text-slate-950 dark:text-white mb-4">
             Privacy Policy
           </h1>
-          <p className="text-lg text-gray-600 dark:text-gray-400">
+          <p className="text-lg text-slate-600 dark:text-slate-400">
             Last updated: January 1, 2024
           </p>
           <Badge variant="outline" className="mt-2">
@@ -188,7 +200,7 @@ const PrivacyPage = () => {
                 <strong>How to Exercise Your Rights:</strong>
               </p>
               <ul>
-                <li>Contact our Data Protection Officer at privacy@tallystore.com</li>
+                <li>Contact us via the <a href="/support" className="underline hover:no-underline">Support Center</a></li>
                 <li>Use the privacy controls in your account settings</li>
                 <li>Submit a request through our support center</li>
               </ul>
@@ -297,7 +309,7 @@ const PrivacyPage = () => {
               </p>
               <ul>
                 <li>Email notification for material changes</li>
-                <li>Dashboard notification upon login</li>
+                <li>Account notification upon login</li>
                 <li>Updated "Last modified" date at the top of this policy</li>
                 <li>30-day notice period for significant changes</li>
               </ul>
@@ -318,10 +330,14 @@ const PrivacyPage = () => {
                 For any privacy-related questions or concerns:
               </p>
               <div className="mt-4 space-y-2 text-green-700 dark:text-green-300">
-                <p>• <strong>Data Protection Officer:</strong> privacy@tallystore.com</p>
-                <p>• <strong>General Support:</strong> <Link to="/support" className="underline hover:no-underline">Visit Support Center</Link></p>
-                <p>• <strong>Mail:</strong> TallyStore Privacy Team, 123 Digital Street, Tech City, TC 12345</p>
-                <p>• <strong>Response Time:</strong> Within 30 days of your request</p>
+                <p>
+                  - <strong>Support:</strong>{' '}
+                  <a href="/support" className="underline hover:no-underline">
+                    Visit Support Center
+                  </a>
+                </p>
+                <p>- <strong>General Support:</strong> <Link to="/support" className="underline hover:no-underline">Visit Support Center</Link></p>
+                <p>- <strong>Response Time:</strong> Within 30 days of your request</p>
               </div>
             </CardContent>
           </Card>
@@ -348,10 +364,11 @@ const PrivacyPage = () => {
           </div>
           
           <p className="text-gray-600 dark:text-gray-400 text-sm">
-            © 2024 TallyStore. All rights reserved.
+            © 2024 Tallybest Store LTD. All rights reserved.
           </p>
         </div>
-      </div>
+      </main>
+      <Footer />
     </div>
   )
 }

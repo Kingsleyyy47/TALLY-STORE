@@ -2,156 +2,316 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Routes, Route } from "react-router-dom";
+import { lazy, Suspense } from 'react'
+import { Navigate, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "next-themes";
-import { AuthProvider } from '@/contexts/SimpleAuth'
+import { AuthProvider, useAuth } from '@/contexts/SimpleAuth'
+import { CurrencyProvider } from '@/contexts/CurrencyContext'
 import { ProtectedRoute, PublicRoute } from '@/components/SimpleProtectedRoute'
+import InstallPromptBanner from '@/components/InstallPromptBanner'
+import AnnouncementBanner from '@/components/AnnouncementBanner'
+import CustomerMaintenanceGate from '@/components/CustomerMaintenanceGate'
+import GlobalPaymentChecker from '@/components/GlobalPaymentChecker'
+import LoginWelcomeDialog from '@/components/LoginWelcomeDialog'
+import SupplierWarningDialog from '@/components/SupplierWarningDialog'
+import ChatWidget from '@/components/ChatWidget'
+import MobileBottomNav from '@/components/MobileBottomNav'
+import VisitorTracker from '@/components/VisitorTracker'
+
+// Emergency customer notice. Reopening requires a separately verified release.
+// This UI gate does not replace backend payment/callback and migration controls.
+const CUSTOMER_MAINTENANCE = false;
 
 // Pages
 import Index from "./pages/Index";
-import SimpleLogin from '@/pages/SimpleLogin'
-import SimpleRegister from '@/pages/SimpleRegister'
-import Dashboard from '@/pages/Dashboard'
-import ProductsPage from '@/pages/ProductsPage'
-import CategoryPage from '@/pages/CategoryPage'
-import ProductDetailPage from '@/pages/ProductDetailPage'
-import CheckoutPage from '@/pages/CheckoutPage'
-import ProfilePage from '@/pages/ProfilePage'
-import OrderHistoryPage from '@/pages/OrderHistoryPage'
-import PaymentCallbackPage from '@/pages/PaymentCallbackPage'
-import PaymentSuccessPage from '@/pages/PaymentSuccessPage'
-import WalletPage from '@/pages/WalletPage'
-import SupportPage from '@/pages/SupportPage'
-import TermsPage from '@/pages/TermsPage'
-import PrivacyPage from '@/pages/PrivacyPage'
-import AboutPage from '@/pages/AboutPage'
-import ContactPage from '@/pages/ContactPage'
-import WebServicesPage from '@/pages/WebServicesPage'
-import AdminPage from '@/pages/AdminPage'
-import EmailConfirmation from '@/pages/EmailConfirmation'
-import NotFound from "./pages/NotFound";
+const SimpleLogin = lazy(() => import('@/pages/SimpleLogin'))
+const SimpleRegister = lazy(() => import('@/pages/SimpleRegister'))
+const ProductsPage = lazy(() => import('@/pages/ProductsPage'))
+const CategoryPage = lazy(() => import('@/pages/CategoryPage'))
+const ProductDetailPage = lazy(() => import('@/pages/ProductDetailPage'))
+const CheckoutPage = lazy(() => import('@/pages/CheckoutPage'))
+const ProfilePage = lazy(() => import('@/pages/ProfilePage'))
+const OrderHistoryPage = lazy(() => import('@/pages/OrderHistoryPage'))
+const PaymentCallbackPage = lazy(() => import('@/pages/PaymentCallbackPage'))
+const PaymentSuccessPage = lazy(() => import('@/pages/PaymentSuccessPage'))
+const WalletPage = lazy(() => import('@/pages/WalletPage'))
+const Dashboard = lazy(() => import('@/pages/Dashboard'))
+const CustomerApiPage = lazy(() => import('@/pages/CustomerApiPage'))
+const ReferralsPage = lazy(() => import('@/pages/ReferralsPage'))
+const UpcomingFeaturePage = lazy(() => import('@/pages/UpcomingFeaturePage'))
+const CryptoExchange = lazy(() => import('@/pages/CryptoExchange'))
+const CryptoHistory = lazy(() => import('@/pages/CryptoHistory'))
+const HowItWorksPage = lazy(() => import('@/pages/HowItWorksPage'))
+const SupportPage = lazy(() => import('@/pages/SupportPage'))
+const TermsPage = lazy(() => import('@/pages/TermsPage'))
+const PrivacyPage = lazy(() => import('@/pages/PrivacyPage'))
+const AboutPage = lazy(() => import('@/pages/AboutPage'))
+const ContactPage = lazy(() => import('@/pages/ContactPage'))
+const WebServicesPage = lazy(() => import('@/pages/WebServicesPage'))
+const AdminPage = lazy(() => import('@/pages/AdminPage'))
+const StaffAdminPage = lazy(() => import('@/pages/StaffAdminPage'))
+const EmailConfirmation = lazy(() => import('@/pages/EmailConfirmation'))
+const GiftCardsEsims = lazy(() => import('@/pages/GiftCardsEsims'))
+const InternationalAirtime = lazy(() => import('@/pages/InternationalAirtime'))
+const SocialBoostPage = lazy(() => import('@/pages/SocialBoostPage'))
+const GetIP = lazy(() => import('@/pages/GetIP'))
+const SmsNumbersPage = lazy(() => import('@/pages/SmsNumbersPage'))
+const TelegramStarsPage = lazy(() => import('@/pages/TelegramStarsPage'))
+const TravelVisaPage = lazy(() => import('@/pages/TravelVisaPage'))
+const NotFound = lazy(() => import('@/pages/NotFound'))
 
 const queryClient = new QueryClient();
 
-const App = () => (
-  <QueryClientProvider client={queryClient}>
-    <ThemeProvider
-      attribute="class"
-      defaultTheme="light"
-      enableSystem
-      disableTransitionOnChange={false}
-    >
-      <TooltipProvider>
-        <Toaster />
-        <Sonner />
+function HomeEntry() {
+  const { user } = useAuth()
+  return user ? <Navigate to="/dashboard" replace /> : <Index />
+}
+
+const StoreApp = () => {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider
+        attribute="class"
+        defaultTheme="light"
+        enableSystem
+        disableTransitionOnChange={false}
+      >
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <AnnouncementBanner />
+          <InstallPromptBanner />
           <AuthProvider>
+          <LoginWelcomeDialog />
+          <SupplierWarningDialog />
+          <CurrencyProvider>
+            <VisitorTracker />
+            <GlobalPaymentChecker />
+            <ChatWidget />
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-muted-foreground">Loading page...</div>}>
             <Routes>
               {/* Public Routes */}
-              <Route path="/" element={<Index />} />
+              <Route path="/" element={<HomeEntry />} />
               <Route path="/products" element={<ProductsPage />} />
               <Route path="/category/:categoryId" element={<CategoryPage />} />
               <Route path="/product/:productId" element={<ProductDetailPage />} />
+              <Route path="/how-it-works" element={<HowItWorksPage />} />
               <Route path="/support" element={<SupportPage />} />
               <Route path="/terms" element={<TermsPage />} />
               <Route path="/privacy" element={<PrivacyPage />} />
               <Route path="/about" element={<AboutPage />} />
               <Route path="/contact" element={<ContactPage />} />
               <Route path="/web-services" element={<WebServicesPage />} />
+              <Route path="/travel-visa" element={<TravelVisaPage />} />
               <Route path="/email-confirmation" element={<EmailConfirmation />} />
-              
+
               {/* Auth Routes - redirect to dashboard if already logged in */}
-              <Route 
-                path="/login" 
+              <Route
+                path="/login"
                 element={
                   <PublicRoute>
                     <SimpleLogin />
                   </PublicRoute>
-                } 
+                }
               />
-              <Route 
-                path="/register" 
+              <Route
+                path="/register"
                 element={
                   <PublicRoute>
                     <SimpleRegister />
                   </PublicRoute>
-                } 
+                }
               />
-              
+
               {/* Auth callback for OAuth - not needed for email/password auth */}
 
               {/* Protected Routes - require authentication */}
-              <Route 
-                path="/dashboard" 
+              <Route path="/developer-api" element={<ProtectedRoute requireRole="user"><CustomerApiPage /></ProtectedRoute>} />
+              <Route
+                path="/dashboard"
                 element={
                   <ProtectedRoute requireRole="user">
                     <Dashboard />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="/profile" 
+              <Route
+                path="/profile"
                 element={
                   <ProtectedRoute>
                     <ProfilePage />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="/orders" 
+              <Route
+                path="/orders"
                 element={
                   <ProtectedRoute>
                     <OrderHistoryPage />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="/checkout" 
+              <Route
+                path="/checkout"
                 element={
                   <ProtectedRoute>
                     <CheckoutPage />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="/wallet" 
+              <Route
+                path="/wallet"
                 element={
                   <ProtectedRoute requireRole="user">
                     <WalletPage />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="/payment-callback" 
+              <Route
+                path="/referrals"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <ReferralsPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/payment-callback"
                 element={
                   <ProtectedRoute requireRole="user">
                     <PaymentCallbackPage />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="/payment-success" 
+              <Route
+                path="/payment-success"
                 element={
                   <ProtectedRoute requireRole="user">
                     <PaymentSuccessPage />
                   </ProtectedRoute>
-                } 
+                }
               />
-              <Route 
-                path="/admin" 
+              <Route
+                path="/crypto-exchange"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <CryptoExchange />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/bills"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <UpcomingFeaturePage feature="bills" />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/gift-cards"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <GiftCardsEsims />
+                  </ProtectedRoute>
+                }
+              />
+              <Route path="/international-airtime" element={<ProtectedRoute requireRole="user"><InternationalAirtime /></ProtectedRoute>} />
+              <Route
+                path="/crypto-withdrawal"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <Navigate to="/wallet" replace />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/referral-withdrawal"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <Navigate to="/referrals" replace />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/crypto-history"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <CryptoHistory />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/get-ip"
+                element={
+                  <ProtectedRoute requireRole="admin">
+                    <GetIP />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/social-boost"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <SocialBoostPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/sms-numbers"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <SmsNumbersPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/telegram-stars"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <TelegramStarsPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/us-canada"
+                element={
+                  <ProtectedRoute requireRole="user">
+                    <SmsNumbersPage />
+                  </ProtectedRoute>
+                }
+              />
+              <Route
+                path="/admin"
                 element={
                   <ProtectedRoute requireRole="admin">
                     <AdminPage />
                   </ProtectedRoute>
-                } 
+                }
+              />
+              <Route
+                path="/staff-admin"
+                element={
+                  <ProtectedRoute requireRole="staff">
+                    <StaffAdminPage />
+                  </ProtectedRoute>
+                }
               />
 
               {/* Catch all route */}
               <Route path="*" element={<NotFound />} />
             </Routes>
+            </Suspense>
+            <MobileBottomNav />
+          </CurrencyProvider>
           </AuthProvider>
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>
-);
+  );
+};
 
-export default App;
+export default function App() {
+  return CUSTOMER_MAINTENANCE
+    ? <CustomerMaintenanceGate><StoreApp /></CustomerMaintenanceGate>
+    : <StoreApp />;
+}

@@ -1,0 +1,3 @@
+-- Retired manual SQL Editor repair script. Intentionally no-op.
+-- Its SELECT policy exposed all user_id IS NULL event rows to browser clients.
+-- Ordered migration 20260924013000 permits only authenticated own-event reads.

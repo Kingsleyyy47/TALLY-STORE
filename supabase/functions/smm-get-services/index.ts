@@ -1,0 +1,135 @@
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+serve(async (req) => {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
+
+  try {
+    // Get user from auth header
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      throw new Error('Missing authorization header');
+    }
+
+    // Initialize Supabase client
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      {
+        global: {
+          headers: { Authorization: authHeader },
+        },
+        auth: {
+          persistSession: false,
+        },
+      }
+    );
+
+    // Get authenticated user
+    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(
+      authHeader.replace('Bearer ', '')
+    );
+
+    if (userError || !user) {
+      throw new Error('Unauthorized');
+    }
+
+    // Parse request body for optional filters
+    let platform: string | null = null;
+    let category: string | null = null;
+
+    try {
+      const body = await req.json();
+      platform = body.platform || null;
+      category = body.category || null;
+    } catch {
+      // No body or invalid JSON - that's fine, no filters
+    }
+
+    // Initialize admin client for database query
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+
+    // Build query
+    let query = supabaseAdmin
+      .from('smm_services')
+      .select(`
+        id, name, category, platform, service_type,
+        price_ngn, min_quantity, max_quantity,
+        has_refill, has_cancel, is_active
+      `)
+      .eq('is_active', true)
+      .order('platform')
+      .order('category')
+      .order('price_ngn');
+
+    if (platform) {
+      query = query.eq('platform', platform.toLowerCase());
+    }
+
+    if (category) {
+      query = query.ilike('category', `%${category}%`);
+    }
+
+    const { data: services, error: servicesError } = await query;
+
+    if (servicesError) {
+      throw new Error(`Failed to fetch services: ${servicesError.message}`);
+    }
+
+    const publicServices = services || [];
+
+    // Group services by platform for easier frontend rendering
+    const groupedByPlatform: Record<string, typeof publicServices> = {};
+    const platforms: string[] = [];
+
+    for (const service of publicServices) {
+      if (!groupedByPlatform[service.platform]) {
+        groupedByPlatform[service.platform] = [];
+        platforms.push(service.platform);
+      }
+      groupedByPlatform[service.platform].push(service);
+    }
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        data: {
+          services: publicServices,
+          grouped: groupedByPlatform,
+          platforms: platforms,
+          total: publicServices.length,
+        },
+      }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      }
+    );
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : '';
+    console.error('SMM Get Services Error:', error);
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: errorMessage === 'Unauthorized' || errorMessage === 'Missing authorization header'
+          ? 'Unauthorized'
+          : 'Service catalog temporarily unavailable',
+      }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: errorMessage === 'Unauthorized' || errorMessage === 'Missing authorization header' ? 401 : 500,
+      }
+    );
+  }
+});

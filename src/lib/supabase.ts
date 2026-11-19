@@ -1,5 +1,4 @@
 import { createClient } from '@supabase/supabase-js'
-import { sendCredentialsEmail } from './email'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
@@ -10,14 +9,214 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+export type AdminWalletFinancialTruth = {
+  user_id: string
+  verified_gateway_deposits: number
+  approved_admin_credits: number
+  approved_historical_admin_credits?: number
+  legacy_approved_principal: number
+  legacy_first_recorded_debit_at: string | null
+  legacy_first_recorded_funding_at: string | null
+  legacy_spend_before_recorded_funding: boolean
+  trusted_principal: number
+  completed_debits: number
+  completed_purchases: number
+  eligible_refunds: number
+  completed_refunds: number
+  net_consumed_spend: number
+  spend_exposure: number
+  active_reservations: number
+  withdrawals: number
+  chargebacks: number
+  trusted_book_balance: number
+  trusted_available_before_holds: number
+  confirmed_spendable: number
+  authorization_basis: string
+  duplicate_payment_identities: number
+  expected_ledger_balance: number
+  recorded_transaction_balance?: number
+  stored_wallet_balance: number
+  explained_difference: number
+  unexplained_difference: number
+  quarantined_excess: number
+  integrity_status: string
+  evidence_complete: boolean
+  spending_blocked: boolean
+  account_suspended: boolean
+  wallet_review_required: boolean
+  wallet_review_reason?: string | null
+}
+
+export type AdminWalletFinancialTruthPageRow = {
+  user_id: string
+  email: string | null
+  full_name: string | null
+  is_staff: boolean
+  is_admin: boolean
+  account_suspended: boolean
+  wallet_review_required: boolean
+  suspension_reason: string | null
+  suspended_at: string | null
+  truth: AdminWalletFinancialTruth
+}
+
+export type AdminCrossWalletPaymentConflict = {
+  payment_identity: string
+  wallet_ids: string[]
+  funding_rows: number
+}
+
+export type AdminFraudVisitTelemetry = {
+  user_id: string
+  ip_address: string | null
+  ip_source: string | null
+  observed_at: string | null
+  user_agent: string | null
+  ip_country: string | null
+  ip_region: string | null
+  ip_city: string | null
+  ip_isp: string | null
+  ip_addresses: string[]
+}
+
+const FINANCIAL_TRUTH_AMOUNTS = [
+  'verified_gateway_deposits', 'approved_admin_credits', 'legacy_approved_principal',
+  'trusted_principal', 'completed_debits', 'completed_purchases', 'eligible_refunds',
+  'completed_refunds', 'net_consumed_spend', 'spend_exposure',
+  'active_reservations', 'withdrawals', 'chargebacks',
+  'trusted_book_balance', 'confirmed_spendable', 'expected_ledger_balance',
+  'trusted_available_before_holds', 'duplicate_payment_identities',
+  'stored_wallet_balance', 'explained_difference', 'unexplained_difference',
+  'quarantined_excess',
+] as const
+
+function parseAdminWalletFinancialTruth(value: unknown): AdminWalletFinancialTruth {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Canonical wallet financial truth is unavailable.')
+  }
+  const record = value as Record<string, unknown>
+  if (typeof record.user_id !== 'string' || !record.user_id ||
+      typeof record.integrity_status !== 'string' || !record.integrity_status ||
+      typeof record.evidence_complete !== 'boolean' ||
+      typeof record.spending_blocked !== 'boolean' ||
+      typeof record.account_suspended !== 'boolean' ||
+      typeof record.wallet_review_required !== 'boolean' ||
+      typeof record.authorization_basis !== 'string') {
+    throw new Error('Canonical wallet financial truth is incomplete.')
+  }
+  const parsed: Record<string, unknown> = { ...record }
+  for (const field of FINANCIAL_TRUTH_AMOUNTS) {
+    const amount = record[field]
+    if ((typeof amount !== 'number' && typeof amount !== 'string') ||
+        amount === '' || !Number.isFinite(Number(amount))) {
+      throw new Error(`Canonical wallet financial truth is missing ${field}.`)
+    }
+    parsed[field] = Number(amount)
+  }
+  if (record.approved_historical_admin_credits !== undefined) {
+    const recovered = record.approved_historical_admin_credits
+    if ((typeof recovered !== 'number' && typeof recovered !== 'string') ||
+        recovered === '' || !Number.isFinite(Number(recovered))) {
+      throw new Error('Canonical wallet financial truth has an invalid historical admin credit total.')
+    }
+    parsed.approved_historical_admin_credits = Number(recovered)
+  }
+  if (record.recorded_transaction_balance !== undefined) {
+    const recorded = record.recorded_transaction_balance
+    if ((typeof recorded !== 'number' && typeof recorded !== 'string') ||
+        recorded === '' || !Number.isFinite(Number(recorded))) {
+      throw new Error('Canonical wallet financial truth has an invalid recorded transaction total.')
+    }
+    parsed.recorded_transaction_balance = Number(recorded)
+  }
+  return parsed as AdminWalletFinancialTruth
+}
+
+export async function getAdminWalletFinancialTruth(userId: string): Promise<AdminWalletFinancialTruth> {
+  const { data, error } = await supabase.rpc('get_admin_wallet_financial_truth', { p_user_id: userId })
+  if (error) throw new Error(`Canonical wallet financial truth failed: ${error.message}`)
+  const truth = parseAdminWalletFinancialTruth(data)
+  if (truth.user_id !== userId) throw new Error('Canonical wallet financial truth returned the wrong customer.')
+  return truth
+}
+
+export async function getAdminWalletFinancialTruthPage(afterUserId: string | null): Promise<AdminWalletFinancialTruthPageRow[]> {
+  const { data, error } = await supabase.rpc('get_admin_wallet_financial_truth_page', {
+    p_after_user_id: afterUserId,
+    p_limit: 100,
+  })
+  if (error) throw new Error(`Canonical wallet financial truth page failed: ${error.message}`)
+  if (!Array.isArray(data)) throw new Error('Canonical wallet financial truth page is unavailable.')
+  return data.map((value: unknown) => {
+    if (!value || typeof value !== 'object') throw new Error('Canonical wallet financial truth page is malformed.')
+    const row = value as Record<string, unknown>
+    if (typeof row.user_id !== 'string' || !row.user_id ||
+        typeof row.is_staff !== 'boolean' ||
+        typeof row.is_admin !== 'boolean' ||
+        typeof row.account_suspended !== 'boolean' ||
+        typeof row.wallet_review_required !== 'boolean') {
+      throw new Error('Canonical wallet financial truth page is incomplete.')
+    }
+    const truth = parseAdminWalletFinancialTruth(row.truth)
+    if (truth.user_id !== row.user_id) throw new Error('Canonical wallet financial truth page has a customer mismatch.')
+    return { ...row, truth } as AdminWalletFinancialTruthPageRow
+  })
+}
+
+export async function getAdminCrossWalletPaymentConflictsPage(
+  afterPaymentIdentity: string | null,
+): Promise<AdminCrossWalletPaymentConflict[]> {
+  const { data, error } = await supabase.rpc('get_admin_cross_wallet_payment_conflicts_page', {
+    p_after_payment_identity: afterPaymentIdentity,
+    p_limit: 100,
+  })
+  if (error) throw new Error(`Cross-wallet payment evidence failed: ${error.message}`)
+  if (!Array.isArray(data)) throw new Error('Cross-wallet payment evidence is unavailable.')
+  return data.map((value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('Cross-wallet payment evidence is malformed.')
+    }
+    const row = value as Record<string, unknown>
+    if (typeof row.payment_identity !== 'string' || !row.payment_identity ||
+        !Array.isArray(row.wallet_ids) || row.wallet_ids.length < 2 ||
+        !row.wallet_ids.every((id) => typeof id === 'string' && id) ||
+        !Number.isSafeInteger(Number(row.funding_rows)) || Number(row.funding_rows) < 2) {
+      throw new Error('Cross-wallet payment evidence is incomplete.')
+    }
+    return {
+      payment_identity: row.payment_identity,
+      wallet_ids: row.wallet_ids,
+      funding_rows: Number(row.funding_rows),
+    }
+  })
+}
+
+export async function getAdminFraudLatestVisits(userIds: string[]): Promise<AdminFraudVisitTelemetry[]> {
+  if (userIds.length === 0) return []
+  if (userIds.length > 100) throw new Error('Fraud visit telemetry page is too large.')
+  const { data, error } = await supabase.rpc('get_admin_fraud_latest_visits', { p_user_ids: userIds })
+  if (error) throw new Error(`Fraud visit telemetry failed: ${error.message}`)
+  if (!Array.isArray(data)) throw new Error('Fraud visit telemetry is unavailable.')
+  const requested = new Set(userIds)
+  return data.map((value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error('Fraud visit telemetry is malformed.')
+    }
+    const row = value as Record<string, unknown>
+    if (typeof row.user_id !== 'string' || !requested.has(row.user_id) ||
+        !Array.isArray(row.ip_addresses) ||
+        !row.ip_addresses.every((ip: unknown) => typeof ip === 'string')) {
+      throw new Error('Fraud visit telemetry contains an unexpected customer or IP list.')
+    }
+    return row as AdminFraudVisitTelemetry
+  })
+}
+
 // Test database connection and setup
 export async function testAuthConnection(): Promise<{ success: boolean; message: string }> {
   try {
-    console.log('🔍 Testing Supabase auth connection...')
-    
     // Test basic connection
     const { data: { session } } = await supabase.auth.getSession()
-    console.log('✅ Supabase auth connection successful')
     
     // Test if profiles table exists
     const { data, error } = await supabase
@@ -35,7 +234,6 @@ export async function testAuthConnection(): Promise<{ success: boolean; message:
       throw error
     }
     
-    console.log('✅ Profiles table exists and accessible')
     return { success: true, message: 'Authentication tables are ready!' }
     
   } catch (error) {
@@ -50,16 +248,15 @@ export async function testAuthConnection(): Promise<{ success: boolean; message:
 // User authentication functions
 export async function createUserProfile(userId: string, username: string): Promise<{ success: boolean; message: string; profile?: Profile }> {
   try {
+    const profileRow = {
+      id: userId,
+      full_name: username,
+      email: username.includes('@') ? username : null,
+    }
+
     const { data, error } = await supabase
       .from('profiles')
-      .insert([
-        {
-          id: userId,
-          username: username,
-          wallet_balance: 0,
-          is_admin: false,
-        }
-      ])
+      .insert([profileRow])
       .select()
       .single()
 
@@ -105,11 +302,23 @@ export async function getUserProfile(userId: string): Promise<Profile | null> {
 // Database types
 export interface Profile {
   id: string
-  username: string
+  username?: string
   wallet_balance: number
   is_admin: boolean
+  is_staff?: boolean
+  account_suspended?: boolean
+  suspension_reason?: string | null
+  suspended_at?: string | null
+  suspension_reinstated_at?: string | null
+  wallet_review_required?: boolean
+  wallet_review_reason?: string | null
+  wallet_reviewed_at?: string | null
+  wallet_reviewed_by?: string | null
   created_at: string
   updated_at: string
+  referral_code?: string
+  referred_by?: string | null
+  referral_balance?: number
 }
 
 export interface Category {
@@ -128,9 +337,57 @@ export interface ProductGroup {
   price: number
   features?: any[]
   stock_count: number
+  availability_status?: 'AVAILABLE' | 'LOW_STOCK' | 'PREORDER' | 'BACKORDER' | 'UNLIMITED' | 'UNAVAILABLE' | 'PAUSED' | 'UNKNOWN' | string | null
+  is_sellable?: boolean | null
   is_active: boolean
   created_at: string
   categories?: { name: string }
+  muabanvia_product_id?: string | null
+  auto_fulfill_enabled?: boolean
+  shopclone_product_id?: string | null
+  shopviaclone_product_id?: string | null
+  auto_restock_enabled?: boolean
+  restock_buffer_days?: number
+  quantity_discount_tiers?: QuantityDiscountTier[]
+}
+
+export const PUBLIC_PRODUCT_GROUP_COLUMNS =
+  'id,category_id,name,description,price,features,stock_count,availability_status,is_sellable,is_active,created_at,quantity_discount_tiers'
+
+export interface QuantityDiscountTier {
+  min_qty: number
+  discount_pct: number
+}
+
+// Kill switch: both quantity discount tiers and discount codes are paused
+// store-wide while a better bundle/promo solution is worked out. Flip this
+// back to true to re-enable both (no data was deleted - tiers and codes are
+// still sitting in the DB, just not applied at checkout). Mirrors the same
+// flag in supabase/functions/process-purchase/index.ts - keep both in sync.
+export const DISCOUNTS_ENABLED = true
+
+// Picks the best applicable bulk tier for a given quantity (highest min_qty the
+// quantity meets or exceeds) and returns the discounted total. Tiers start at 2
+// units so a single account cannot accidentally be repriced by a "bulk" rule.
+// Mirrors the exact same logic used server-side in process-purchase/index.ts.
+export function computeDiscountedTotal(
+  unitPrice: number,
+  quantity: number,
+  tiers: QuantityDiscountTier[] | undefined | null,
+): { total: number; discountPct: number; originalTotal: number } {
+  const originalTotal = unitPrice * quantity
+  if (!DISCOUNTS_ENABLED || !tiers || tiers.length === 0) {
+    return { total: originalTotal, discountPct: 0, originalTotal }
+  }
+  const applicable = tiers
+    .filter((t) => Number(t.min_qty) >= 2 && quantity >= Number(t.min_qty))
+    .sort((a, b) => b.discount_pct - a.discount_pct)[0]
+  if (!applicable) {
+    return { total: originalTotal, discountPct: 0, originalTotal }
+  }
+  const discountPct = Math.min(Math.max(applicable.discount_pct, 0), 100)
+  const total = Math.round(originalTotal * (1 - discountPct / 100))
+  return { total, discountPct, originalTotal }
 }
 
 export interface Product {
@@ -170,46 +427,95 @@ export interface Transaction {
 }
 
 // STEP 1B: Basic database functions
+// Module-level cache — shared across all components so multiple simultaneous
+// callers on the same page share a single in-flight request and reuse the result
+// for 3 minutes before hitting the DB again.
+const CACHE_TTL = 3 * 60 * 1000 // 3 minutes
+let _categoriesCache: { data: Category[]; ts: number } | null = null
+let _categoriesInflight: Promise<Category[]> | null = null
+let _pgCache: { data: ProductGroup[]; ts: number } | null = null
+let _pgInflight: Promise<ProductGroup[]> | null = null
+
 export async function getCategories(): Promise<Category[]> {
-  try {
-    const { data, error } = await supabase
-      .from('categories')
-      .select('*')
-      .eq('is_active', true)
-      .order('name')
-
-    if (error) {
-      console.error('Supabase error:', error)
-      throw error
-    }
-
-    console.log('✅ Categories fetched from Supabase:', data)
-    return data || []
-  } catch (error) {
-    console.error('❌ Error fetching categories:', error)
-    return []
+  if (_categoriesCache && Date.now() - _categoriesCache.ts < CACHE_TTL) {
+    return _categoriesCache.data
   }
+  if (_categoriesInflight) return _categoriesInflight
+
+  _categoriesInflight = (async () => {
+    try {
+      const timeout = new Promise<{ data: null; error: Error }>(resolve =>
+        setTimeout(() => resolve({ data: null, error: new Error('getCategories timeout') }), 12000)
+      )
+      const { data, error } = await Promise.race([
+        supabase.from('categories').select('*').eq('is_active', true).order('name'),
+        timeout,
+      ])
+      if (error) { console.error('Supabase error:', error); throw error }
+      const result = data || []
+      _categoriesCache = { data: result, ts: Date.now() }
+      return result
+    } catch (error) {
+      console.error('Error fetching categories:', error)
+      return _categoriesCache?.data || []
+    } finally {
+      _categoriesInflight = null
+    }
+  })()
+
+  return _categoriesInflight
+}
+
+// Staff catalog editing needs a fresh category list and a visible read error.
+export async function getCategoriesStrict(signal?: AbortSignal): Promise<Category[]> {
+  const { data, error } = await supabase.from('categories').select('*')
+    .eq('is_active', true).order('name').abortSignal(signal ?? new AbortController().signal)
+  if (error || !Array.isArray(data)) throw new Error('Categories are temporarily unavailable.')
+  return data
 }
 
 export async function getAllProductGroups(): Promise<ProductGroup[]> {
-  try {
-    const { data, error } = await supabase
-      .from('product_groups')
-      .select('*')
-      .eq('is_active', true)
-      .order('name')
-
-    if (error) {
-      console.error('Supabase error:', error)
-      throw error
-    }
-
-    console.log('✅ Product groups fetched from Supabase:', data)
-    return data || []
-  } catch (error) {
-    console.error('❌ Error fetching product groups:', error)
-    return []
+  if (_pgCache && Date.now() - _pgCache.ts < CACHE_TTL) {
+    return _pgCache.data
   }
+  if (_pgInflight) return _pgInflight
+
+  _pgInflight = (async () => {
+    try {
+      const timeout = new Promise<{ data: null; error: Error }>(resolve =>
+        setTimeout(() => resolve({ data: null, error: new Error('getAllProductGroups timeout') }), 12000)
+      )
+      const { data, error } = await Promise.race([
+        supabase.from('product_groups').select(PUBLIC_PRODUCT_GROUP_COLUMNS).eq('is_active', true).order('name'),
+        timeout,
+      ])
+      if (error) { console.error('Supabase error:', error); throw error }
+      const result = data || []
+      _pgCache = { data: result, ts: Date.now() }
+      return result
+    } catch (error) {
+      console.error('Error fetching product groups:', error)
+      return _pgCache?.data || []
+    } finally {
+      _pgInflight = null
+    }
+  })()
+
+  return _pgInflight
+}
+
+export async function getManagedProductGroups(): Promise<ProductGroup[]> {
+  const { data, error } = await supabase.rpc('get_managed_product_groups')
+  if (error) throw new Error('Managed product catalog is unavailable.')
+  if (!Array.isArray(data)) throw new Error('Managed product catalog is incomplete.')
+  return data as ProductGroup[]
+}
+
+export async function getManagedProductGroup(productGroupId: string): Promise<ProductGroup | null> {
+  const { data, error } = await supabase.rpc('get_managed_product_group', { p_id: productGroupId })
+  if (error) throw new Error('Managed product details are unavailable.')
+  if (!Array.isArray(data)) throw new Error('Managed product details are incomplete.')
+  return (data[0] as ProductGroup | undefined) || null
 }
 
 export async function testConnection() {
@@ -217,9 +523,6 @@ export async function testConnection() {
     // Test basic Supabase connection without hitting RLS policies
     // Just test if we can reach Supabase at all
     const { data: { session } } = await supabase.auth.getSession()
-    
-    console.log('🔗 Supabase connection successful!')
-    console.log('📊 Current session:', session ? 'Authenticated' : 'Anonymous')
     
     return true
   } catch (error) {
@@ -250,7 +553,6 @@ export async function createCategory(name: string, displayName: string, descript
       throw error
     }
 
-    console.log('✅ Category created:', data)
     return data
   } catch (error) {
     console.error('❌ Failed to create category:', error)
@@ -272,7 +574,6 @@ export async function updateCategory(id: string, updates: Partial<Category>): Pr
       throw error
     }
 
-    console.log('✅ Category updated:', data)
     return data
   } catch (error) {
     console.error('❌ Failed to update category:', error)
@@ -292,7 +593,6 @@ export async function deleteCategory(id: string): Promise<boolean> {
       throw error
     }
 
-    console.log('✅ Category deleted:', id)
     return true
   } catch (error) {
     console.error('❌ Failed to delete category:', error)
@@ -306,7 +606,7 @@ export async function createProductGroup(productGroup: Omit<ProductGroup, 'id' |
     const { data, error } = await supabase
       .from('product_groups')
       .insert([productGroup])
-      .select()
+      .select(PUBLIC_PRODUCT_GROUP_COLUMNS)
       .single()
 
     if (error) {
@@ -314,7 +614,6 @@ export async function createProductGroup(productGroup: Omit<ProductGroup, 'id' |
       throw error
     }
 
-    console.log('✅ Product group created:', data)
     return data
   } catch (error) {
     console.error('❌ Failed to create product group:', error)
@@ -328,7 +627,7 @@ export async function updateProductGroup(id: string, updates: Partial<ProductGro
       .from('product_groups')
       .update(updates)
       .eq('id', id)
-      .select()
+      .select(PUBLIC_PRODUCT_GROUP_COLUMNS)
       .single()
 
     if (error) {
@@ -336,7 +635,6 @@ export async function updateProductGroup(id: string, updates: Partial<ProductGro
       throw error
     }
 
-    console.log('✅ Product group updated:', data)
     return data
   } catch (error) {
     console.error('❌ Failed to update product group:', error)
@@ -348,7 +646,7 @@ export async function deleteProductGroup(id: string): Promise<boolean> {
   try {
     // First check if there are any orders referencing this product group
     const { data: orders, error: ordersError } = await supabase
-      .from('orders')
+      .from('orders_safe_history' as any)
       .select('id')
       .eq('product_group_id', id)
       .limit(1)
@@ -389,7 +687,6 @@ export async function deleteProductGroup(id: string): Promise<boolean> {
       throw error
     }
 
-    console.log('✅ Product group deleted:', id)
     return true
   } catch (error) {
     console.error('❌ Failed to delete product group:', error)
@@ -410,7 +707,6 @@ export async function archiveProductGroup(id: string): Promise<boolean> {
       throw error
     }
 
-    console.log('✅ Product group archived:', id)
     return true
   } catch (error) {
     console.error('❌ Failed to archive product group:', error)
@@ -431,7 +727,6 @@ export async function restoreProductGroup(id: string): Promise<boolean> {
       throw error
     }
 
-    console.log('✅ Product group restored:', id)
     return true
   } catch (error) {
     console.error('❌ Failed to restore product group:', error)
@@ -448,10 +743,35 @@ export interface IndividualAccount {
   email?: string
   email_password?: string
   two_fa_code?: string
+  recovery_email?: string
+  recovery_email_password?: string
   additional_info?: any
   status: 'available' | 'sold' | 'reserved'
   created_at: string
   sold_at?: string
+}
+
+export type PublicAccount = Pick<IndividualAccount, 'id' | 'product_group_id' | 'status' | 'created_at'>
+
+export interface PurchasedAccountCredentials {
+  username?: string
+  password?: string
+  email?: string
+  email_password?: string
+  two_fa_code?: string
+  recovery_email?: string
+  recovery_email_password?: string
+  additional_info?: any
+}
+
+export interface PurchaseAccountDetails {
+  accounts?: PurchasedAccountCredentials[]
+  product_name?: string
+  category?: string
+  quantity?: number
+  price_per_unit?: number
+  charged_amount_ngn?: number
+  discount_code?: string | null
 }
 
 export async function createIndividualAccount(account: Omit<IndividualAccount, 'id' | 'created_at'>): Promise<IndividualAccount | null> {
@@ -470,7 +790,6 @@ export async function createIndividualAccount(account: Omit<IndividualAccount, '
     // Update stock count in product group
     await updateProductGroupStock(account.product_group_id)
 
-    console.log('✅ Individual account created:', data)
     return data
   } catch (error) {
     console.error('❌ Failed to create individual account:', error)
@@ -494,7 +813,6 @@ export async function bulkCreateIndividualAccounts(accounts: Omit<IndividualAcco
     const productGroupIds = [...new Set(accounts.map(acc => acc.product_group_id))]
     await Promise.all(productGroupIds.map(id => updateProductGroupStock(id)))
 
-    console.log('✅ Bulk accounts created:', data.length)
     return data
   } catch (error) {
     console.error('❌ Failed to bulk create accounts:', error)
@@ -524,6 +842,430 @@ export async function getIndividualAccounts(productGroupId?: string): Promise<In
   }
 }
 
+export async function getIndividualAccountsPage(page: number, pageSize = 100): Promise<IndividualAccount[]> {
+  const from = Math.max(0, page) * pageSize
+  const { data, error } = await supabase
+    .from('individual_accounts')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .range(from, from + pageSize - 1)
+
+  if (error) throw error
+  return data || []
+}
+
+// Get total count of individual accounts (for admin dashboard stats)
+export async function getIndividualAccountsCount(): Promise<number> {
+  try {
+    const { count, error } = await supabase
+      .from('individual_accounts')
+      .select('*', { count: 'exact', head: true })
+
+    if (error) {
+      console.error('❌ Error counting individual accounts:', error)
+      return 0
+    }
+
+    return count || 0
+  } catch (error) {
+    console.error('❌ Failed to count individual accounts:', error)
+    return 0
+  }
+}
+
+// Returns product_group_ids ordered by most-recently-restocked (i.e. the
+// most recent individual_accounts inventory was added), deduped, most
+// recent first. Used to power the "Refilled" section on the Products page.
+export async function getRecentlyRestockedProductGroupIds(limit: number = 4): Promise<string[]> {
+  try {
+    const { data, error } = await supabase
+      .from('individual_accounts_public')
+      .select('product_group_id, created_at')
+      .eq('status', 'available')
+      .order('created_at', { ascending: false })
+      .limit(500)
+
+    if (error) {
+      console.error('❌ Error fetching recently restocked accounts:', error)
+      throw error
+    }
+
+    const seen = new Set<string>()
+    const orderedIds: string[] = []
+    for (const row of data || []) {
+      if (!seen.has(row.product_group_id)) {
+        seen.add(row.product_group_id)
+        orderedIds.push(row.product_group_id)
+      }
+      if (orderedIds.length >= limit) break
+    }
+
+    return orderedIds
+  } catch (error) {
+    console.error('❌ Failed to fetch recently restocked product groups:', error)
+    return []
+  }
+}
+
+// Maps product_group_id -> one available individual_account id, so UI tiles
+// (Popular Products, New, Refilled) that only know the product GROUP can
+// still link to a real, clickable account on the Product Detail page (which
+// is keyed by individual account id, not product group id).
+export async function getAvailableAccountIdsByProductGroup(): Promise<Record<string, string>> {
+  try {
+    const { data, error } = await supabase
+      .from('individual_accounts_public')
+      .select('id, product_group_id, status')
+      .limit(5000)
+
+    if (error) {
+      console.error('❌ Error fetching available account map:', error)
+      throw error
+    }
+
+    // Prefer an 'available' account per product group, but fall back to
+    // ANY account (sold/reserved) if that's all that exists, so tiles can
+    // still link straight to the product detail page instead of bouncing
+    // to the category page just because the only known account isn't
+    // currently in stock.
+    const availableMap: Record<string, string> = {}
+    const anyMap: Record<string, string> = {}
+    for (const row of data || []) {
+      if (!anyMap[row.product_group_id]) {
+        anyMap[row.product_group_id] = row.id
+      }
+      if (row.status === 'available' && !availableMap[row.product_group_id]) {
+        availableMap[row.product_group_id] = row.id
+      }
+    }
+    return { ...anyMap, ...availableMap }
+  } catch (error) {
+    console.error('❌ Failed to fetch available account map:', error)
+    return {}
+  }
+}
+
+// Real "most bought" ranking for the Popular Products section, computed by a
+// security-definer RPC so staff/admin orders never contaminate customer-facing
+// popularity while profile rows stay hidden from customer browsers.
+export async function getTopSellingProductGroupIds(limit: number = 8): Promise<string[]> {
+  try {
+    const { data, error } = await supabase.rpc('get_public_top_product_group_ids', {
+      p_limit: limit,
+    })
+
+    if (error) {
+      console.error('❌ Error fetching customer top sellers:', error)
+      throw error
+    }
+
+    return (data || [])
+      .map((row: { product_group_id?: string | null }) => row.product_group_id)
+      .filter((id): id is string => Boolean(id))
+  } catch (error) {
+    console.error('❌ Failed to fetch top selling product groups:', error)
+    return []
+  }
+}
+
+// Per-user purchase history, used to power "Recommended for you" ordering on
+// product listing pages: which product groups (and their categories) has
+// this user actually bought before, ranked by how many times. Categories the
+// user already buys from are what "recommended" leans on most; the global
+// top-seller ranking (getTopSellingProductGroupIds) fills in the rest.
+export async function getUserPurchaseHistory(userId: string): Promise<{
+  productGroupCounts: Record<string, number>
+  categoryCounts: Record<string, number>
+  lastPurchasedAtByProductGroup: Record<string, string>
+  lastPurchasedAtByCategory: Record<string, string>
+  lastProductGroupId: string | null
+}> {
+  const empty = { productGroupCounts: {}, categoryCounts: {}, lastPurchasedAtByProductGroup: {}, lastPurchasedAtByCategory: {}, lastProductGroupId: null }
+  if (!userId) return empty
+
+  try {
+    const { data, error } = await supabase
+      .from('orders_safe_history' as any)
+      .select('product_group_id, account_details, created_at, product_groups')
+      .eq('user_id', userId)
+      .eq('status', 'completed')
+      .order('created_at', { ascending: false })
+      .limit(2000)
+
+    if (error) {
+      console.error('❌ Error fetching user purchase history:', error)
+      return empty
+    }
+
+    const productGroupCounts: Record<string, number> = {}
+    const categoryCounts: Record<string, number> = {}
+    const lastPurchasedAtByProductGroup: Record<string, string> = {}
+    const lastPurchasedAtByCategory: Record<string, string> = {}
+    let lastProductGroupId: string | null = null
+
+    for (const row of (data || []) as any[]) {
+      if (!row.product_group_id) continue
+      if (!lastProductGroupId) lastProductGroupId = row.product_group_id
+      const details = row.account_details as { quantity?: number } | null
+      const qty = details && typeof details.quantity === 'number' && details.quantity > 0
+        ? details.quantity
+        : 1
+      productGroupCounts[row.product_group_id] = (productGroupCounts[row.product_group_id] || 0) + qty
+      if (!lastPurchasedAtByProductGroup[row.product_group_id] || new Date(row.created_at).getTime() > new Date(lastPurchasedAtByProductGroup[row.product_group_id]).getTime()) {
+        lastPurchasedAtByProductGroup[row.product_group_id] = row.created_at
+      }
+
+      const categoryId = row.product_groups?.category_id
+      if (categoryId) {
+        categoryCounts[categoryId] = (categoryCounts[categoryId] || 0) + qty
+        if (!lastPurchasedAtByCategory[categoryId] || new Date(row.created_at).getTime() > new Date(lastPurchasedAtByCategory[categoryId]).getTime()) {
+          lastPurchasedAtByCategory[categoryId] = row.created_at
+        }
+      }
+    }
+
+    return { productGroupCounts, categoryCounts, lastPurchasedAtByProductGroup, lastPurchasedAtByCategory, lastProductGroupId }
+  } catch (error) {
+    console.error('❌ Failed to fetch user purchase history:', error)
+    return empty
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Product suggestions ("trending category, want to add a product?" panel)
+// ---------------------------------------------------------------------------
+//
+// Trigger is your own store's sales velocity, NOT a live scan of the
+// supplier sites yet - MuaBanVia/ShopClone/ShopViaClone22 do expose a
+// products.php "list of categories and products" endpoint, but its exact
+// response shape hasn't been confirmed, so matching that against your
+// catalog is a follow-up, not part of this first pass.
+
+export interface ProductSuggestion {
+  id: string
+  category_id: string
+  based_on_product_group_id: string | null
+  created_product_group_id: string | null
+  suggested_name: string
+  reason?: string | null
+  velocity_recent?: number | null
+  velocity_previous?: number | null
+  status: 'pending' | 'accepted' | 'dismissed'
+  snoozed_until?: string | null
+  created_at: string
+  updated_at: string
+  categories?: { name: string }
+}
+
+// Scans the last 14 days of completed orders, splits into two 7-day windows,
+// and flags any category whose unit velocity grew by at least `growthRatio`
+// (default 1.5x = 50% faster) with enough absolute volume to not just be
+// noise. For each flagged category, upserts a 'pending' suggestion based on
+// that category's own best-selling template (skipped if one is already
+// pending or still snoozed for that category).
+export async function computeAndUpsertTrendSuggestions(options?: {
+  growthRatio?: number
+  minRecentUnits?: number
+}): Promise<ProductSuggestion[]> {
+  const growthRatio = options?.growthRatio ?? 1.5
+  const minRecentUnits = options?.minRecentUnits ?? 5
+
+  try {
+    const fourteenDaysAgo = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString()
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+
+    const { data: orders, error } = await supabase
+      .from('orders_safe_history' as any)
+      .select('product_group_id, user_id, account_details, created_at, status')
+      .eq('status', 'completed')
+      .gte('created_at', fourteenDaysAgo)
+      .limit(5000)
+
+    if (error) throw error
+
+    const userIds = [...new Set((orders || []).map((order) => order.user_id).filter(Boolean))]
+    const customerUserIds = new Set<string>()
+
+    if (userIds.length > 0) {
+      const { data: profiles, error: profilesError } = await supabase
+        .from('profiles')
+        .select('id, is_staff, is_admin')
+        .in('id', userIds)
+
+      if (profilesError) throw profilesError
+
+      for (const profile of profiles || []) {
+        if (!profile.is_staff && !profile.is_admin) {
+          customerUserIds.add(profile.id)
+        }
+      }
+    }
+
+    const productGroups = await getAllProductGroups()
+    const pgById: Record<string, ProductGroup> = {}
+    productGroups.forEach((pg) => { pgById[pg.id] = pg })
+
+    const recentByCategory: Record<string, number> = {}
+    const previousByCategory: Record<string, number> = {}
+    const recentByProduct: Record<string, number> = {}
+
+    for (const row of orders || []) {
+      if (!customerUserIds.has(row.user_id)) continue
+      const pg = pgById[row.product_group_id]
+      if (!pg) continue
+      const details = row.account_details as { quantity?: number } | null
+      const qty = details && typeof details.quantity === 'number' && details.quantity > 0
+        ? details.quantity
+        : 1
+
+      const isRecent = row.created_at >= sevenDaysAgo
+      if (isRecent) {
+        recentByCategory[pg.category_id] = (recentByCategory[pg.category_id] || 0) + qty
+        recentByProduct[pg.id] = (recentByProduct[pg.id] || 0) + qty
+      } else {
+        previousByCategory[pg.category_id] = (previousByCategory[pg.category_id] || 0) + qty
+      }
+    }
+
+    const { data: existing } = await supabase
+      .from('product_suggestions')
+      .select('category_id, status, snoozed_until')
+      .in('status', ['pending', 'dismissed'])
+
+    const blockedCategoryIds = new Set(
+      (existing || [])
+        .filter((s) => s.status === 'pending' || (s.snoozed_until && s.snoozed_until > new Date().toISOString()))
+        .map((s) => s.category_id),
+    )
+
+    const created: ProductSuggestion[] = []
+
+    for (const categoryId of Object.keys(recentByCategory)) {
+      const recent = recentByCategory[categoryId] || 0
+      const previous = previousByCategory[categoryId] || 0
+      if (recent < minRecentUnits) continue
+      if (blockedCategoryIds.has(categoryId)) continue
+      // previous === 0 with real recent volume still counts as "trending" -
+      // treat it as effectively infinite growth rather than dividing by zero.
+      const growth = previous > 0 ? recent / previous : Infinity
+      if (growth < growthRatio) continue
+
+      const bestTemplate = productGroups
+        .filter((pg) => pg.category_id === categoryId && pg.is_active)
+        .sort((a, b) => (recentByProduct[b.id] || 0) - (recentByProduct[a.id] || 0))[0]
+
+      if (!bestTemplate) continue
+
+      const { data: inserted, error: insertError } = await supabase
+        .from('product_suggestions')
+        .insert([{
+          category_id: categoryId,
+          based_on_product_group_id: bestTemplate.id,
+          suggested_name: `${bestTemplate.name} (New)`,
+          reason: `Sales in this category are up ${previous > 0 ? `${Math.round((growth - 1) * 100)}%` : 'sharply'} vs last week (${recent} vs ${previous} units).`,
+          velocity_recent: recent,
+          velocity_previous: previous,
+          status: 'pending',
+        }])
+        .select('*, categories(name)')
+        .single()
+
+      if (!insertError && inserted) {
+        created.push(inserted)
+      }
+    }
+
+    return created
+  } catch (error) {
+    console.error('❌ Failed to compute trend suggestions:', error)
+    return []
+  }
+}
+
+export async function getProductSuggestions(status: 'pending' | 'accepted' | 'dismissed' = 'pending'): Promise<ProductSuggestion[]> {
+  try {
+    const { data, error } = await supabase
+      .from('product_suggestions')
+      .select('*, categories(name)')
+      .eq('status', status)
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+    return data || []
+  } catch (error) {
+    console.error('❌ Failed to fetch product suggestions:', error)
+    return []
+  }
+}
+
+// "Not now" - hides this suggestion until it's re-flagged after the snooze
+// window passes (default 3 days).
+export async function dismissSuggestion(id: string, snoozeDays: number = 3): Promise<boolean> {
+  try {
+    const snoozedUntil = new Date(Date.now() + snoozeDays * 24 * 60 * 60 * 1000).toISOString()
+    const { error } = await supabase
+      .from('product_suggestions')
+      .update({ status: 'dismissed', snoozed_until: snoozedUntil, updated_at: new Date().toISOString() })
+      .eq('id', id)
+
+    if (error) throw error
+    return true
+  } catch (error) {
+    console.error('❌ Failed to dismiss suggestion:', error)
+    return false
+  }
+}
+
+// "Add product" - clones the based-on template into a new DRAFT product
+// (is_active: false, no stock, provider IDs blank) and links it to the
+// suggestion. This never spends money by itself - the admin still has to
+// open the new draft, fill in a provider ID, and explicitly trigger a test
+// stock purchase afterwards.
+export async function acceptSuggestion(id: string): Promise<ProductGroup | null> {
+  try {
+    const { data: suggestion, error: fetchError } = await supabase
+      .from('product_suggestions')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    if (fetchError || !suggestion) throw fetchError || new Error('Suggestion not found')
+
+    const template = suggestion.based_on_product_group_id
+      ? await (async () => {
+          return getManagedProductGroup(suggestion.based_on_product_group_id)
+        })()
+      : null
+
+    const newProduct = await createProductGroup({
+      category_id: suggestion.category_id,
+      name: suggestion.suggested_name,
+      description: template?.description || '',
+      price: template?.price || 0,
+      features: template?.features || [],
+      stock_count: 0,
+      is_active: false,
+    } as any)
+
+    if (!newProduct) throw new Error('Failed to create draft product')
+
+    await supabase
+      .from('product_suggestions')
+      .update({
+        status: 'accepted',
+        created_product_group_id: newProduct.id,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+
+    return newProduct
+  } catch (error) {
+    console.error('❌ Failed to accept suggestion:', error)
+    return null
+  }
+}
+
 export async function deleteIndividualAccount(id: string): Promise<boolean> {
   try {
     // Get the account to know which product group to update
@@ -548,7 +1290,6 @@ export async function deleteIndividualAccount(id: string): Promise<boolean> {
       await updateProductGroupStock(account.product_group_id)
     }
 
-    console.log('✅ Individual account deleted:', id)
     return true
   } catch (error) {
     console.error('❌ Failed to delete individual account:', error)
@@ -570,7 +1311,6 @@ export async function updateIndividualAccount(id: string, updates: Partial<Omit<
       throw error
     }
 
-    console.log('✅ Individual account updated:', data)
     return data
   } catch (error) {
     console.error('❌ Failed to update individual account:', error)
@@ -579,7 +1319,7 @@ export async function updateIndividualAccount(id: string, updates: Partial<Omit<
 }
 
 // === UTILITY FUNCTIONS ===
-export async function updateProductGroupStock(productGroupId: string): Promise<void> {
+export async function updateProductGroupStock(productGroupId: string): Promise<boolean> {
   try {
     // Count available accounts
     const { count, error } = await supabase
@@ -590,23 +1330,17 @@ export async function updateProductGroupStock(productGroupId: string): Promise<v
 
     if (error) {
       console.error('❌ Error counting accounts:', error)
-      return
+      return false
     }
 
-    // Update the product group stock
-    const { error: updateError } = await supabase
-      .from('product_groups')
-      .update({ stock_count: count || 0 })
-      .eq('id', productGroupId)
-
-    if (updateError) {
-      console.error('❌ Error updating stock:', updateError)
-      return
-    }
-
-    console.log('✅ Stock updated for product group:', productGroupId, 'New count:', count)
+    // The inventory statement trigger has already refreshed the authoritative
+    // count and availability. Invalidate the browser cache after verification.
+    if (count == null) return false
+    _pgCache = null
+    return true
   } catch (error) {
     console.error('❌ Failed to update stock:', error)
+    return false
   }
 }
 
@@ -615,7 +1349,7 @@ export async function getProductGroupsByCategory(categoryId: string): Promise<Pr
   try {
     const { data, error } = await supabase
       .from('product_groups')
-      .select('*')
+      .select(PUBLIC_PRODUCT_GROUP_COLUMNS)
       .eq('category_id', categoryId)
       .eq('is_active', true)
       .order('created_at', { ascending: false })
@@ -655,22 +1389,303 @@ export async function getIndividualAccountsByProductGroup(productGroupId: string
 }
 
 // === CSV PARSING UTILITY ===
-export function parseCSV(csvText: string): any[] {
-  const lines = csvText.trim().split('\n')
-  if (lines.length < 2) return []
+function parseCsvLine(line: string): string[] {
+  const values: string[] = []
+  let current = ''
+  let inQuotes = false
 
-  const headers = lines[0].split(',').map(h => h.trim().toLowerCase())
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index]
+    const next = line[index + 1]
+
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"'
+      index += 1
+      continue
+    }
+
+    if (char === '"') {
+      inQuotes = !inQuotes
+      continue
+    }
+
+    if (char === ',' && !inQuotes) {
+      values.push(current.trim())
+      current = ''
+      continue
+    }
+
+    current += char
+  }
+
+  values.push(current.trim())
+  return values
+}
+
+export const SITE_FORMATS: Record<string, { label: string; sep: string; fields: string[] }> = {
+  facebook:   { label: 'Facebook',    sep: '|', fields: ['username','password','email','email_password','recovery_email','two_fa_code','year','friends_count'] },
+  facebook2:  { label: 'Facebook 2',  sep: '|', fields: ['username','password','email','email_password','recovery_email','year','friends_count'] },
+  instagram:  { label: 'Instagram',   sep: ':', fields: ['username','password','email','email_password'] },
+  tiktok:     { label: 'TikTok',      sep: ':', fields: ['username','password','email','email_password'] },
+  twitter:    { label: 'Twitter',     sep: '|', fields: ['username','password','email','email_password','two_fa_code'] },
+}
+
+export const SITE_FORMAT_HEADERS: Record<string, string> = {
+  facebook:   'username | password | Mail | Mail password | Recovery Mail | 2fa key | year | No of friends',
+  facebook2:  'username | password | Mail | Mail password | Recovery Mail | year | No of friends',
+  instagram:  'username : password : Mail : Mail password',
+  tiktok:     'username : password : Mail : Mail password',
+  twitter:    'username | password | Mail | Mail password | 2fa key |',
+}
+
+export function detectAccountFormat(account: Record<string, any>): string {
+  if (account.friends_count) return 'facebook'
+  if (account.recovery_email && account.year && !account.two_fa_code) return 'facebook2'
+  if (account.two_fa_code && !account.friends_count) return 'twitter'
+  return 'instagram'
+}
+
+const ACCOUNT_STRUCTURED_FIELDS = new Set([
+  'username',
+  'password',
+  'email',
+  'email_password',
+  'two_fa',
+  'two_fa_code',
+  'recovery_email',
+  'recovery_email_password',
+  'year',
+  'friends_count',
+  'additional_info',
+])
+
+function isLikelyAccountEmail(value?: string | null) {
+  return /^[^\s@|:;]+@[^\s@|:;]+\.[^\s@|:;]+$/.test(String(value || '').trim())
+}
+
+function isLikelyAccountTwoFa(value?: string | null) {
+  const compact = String(value || '').replace(/\s+/g, '')
+  return /^[A-Z2-7]{16,}$/i.test(compact) || /^\d{6,8}$/.test(compact)
+}
+
+function isLikelyAccountYear(value?: string | null) {
+  const year = Number(String(value || '').trim())
+  return Number.isInteger(year) && year >= 1990 && year <= new Date().getFullYear() + 1
+}
+
+function isLikelyExtraCredentialValue(value?: string | null) {
+  const raw = String(value || '').trim()
+  const lower = raw.toLowerCase()
+  if (!raw) return false
+  if (raw.length >= 180) return true
+  if (/(^|[;\s"'{}])(csrftoken|csrf_token|csrfmiddlewaretoken|sessionid|session_id|cookie|cookies|auth_token|access_token|refresh_token|bearer)(=|:|[;\s"'{}]|$)/i.test(raw)) return true
+  if (/(^|[;\s])(c_user|xs|datr|sb|fr|wd|presence|m_pixel_ratio|ig_did|mid|ds_user_id|rur|sessionid)\s*=/.test(lower)) return true
+  if ((raw.match(/[A-Za-z0-9_.-]{2,}\s*=/g) || []).length >= 2 && raw.includes(';')) return true
+  if ((raw.startsWith('{') || raw.startsWith('[')) && raw.length >= 80) return true
+  return false
+}
+
+function addAccountExtraInfo(row: Record<string, any>, key: string, value: string) {
+  if (!value) return
+  const current = row.additional_info && typeof row.additional_info === 'object' ? row.additional_info : {}
+  const extraFields = current.extra_fields && typeof current.extra_fields === 'object' ? current.extra_fields : {}
+  const baseKey = key || 'extra'
+  let nextKey = baseKey
+  let suffix = 2
+  while (extraFields[nextKey] != null) {
+    nextKey = `${baseKey}_${suffix}`
+    suffix += 1
+  }
+
+  row.additional_info = {
+    ...current,
+    extra_fields: {
+      ...extraFields,
+      [nextKey]: value,
+    },
+  }
+}
+
+function normalizeParsedAccountRow(input: Record<string, any>) {
+  const row: Record<string, any> = { ...input }
+
+  for (const [key, value] of Object.entries(input)) {
+    if (!ACCOUNT_STRUCTURED_FIELDS.has(key) && value != null && String(value).trim()) {
+      addAccountExtraInfo(row, key, String(value).trim())
+      delete row[key]
+    }
+  }
+
+  for (const field of ['email', 'email_password', 'two_fa', 'two_fa_code', 'recovery_email', 'recovery_email_password']) {
+    const value = row[field] == null ? '' : String(row[field]).trim()
+    if (value && isLikelyExtraCredentialValue(value)) {
+      addAccountExtraInfo(row, `misplaced_${field}`, value)
+      row[field] = ''
+    }
+  }
+
+  if (row.email && !isLikelyAccountEmail(row.email)) {
+    addAccountExtraInfo(row, 'misplaced_email', String(row.email).trim())
+    row.email = ''
+  }
+
+  if (!row.email && isLikelyAccountEmail(row.email_password)) {
+    row.email = String(row.email_password).trim()
+    row.email_password = ''
+  }
+
+  if (!row.recovery_email && isLikelyAccountEmail(row.recovery_email_password)) {
+    row.recovery_email = String(row.recovery_email_password).trim()
+    row.recovery_email_password = ''
+  }
+
+  if (row.recovery_email && !isLikelyAccountEmail(row.recovery_email) && !row.email_password && row.email) {
+    row.email_password = String(row.recovery_email).trim()
+    row.recovery_email = ''
+  }
+
+  if (row.two_fa && !row.two_fa_code) {
+    row.two_fa_code = row.two_fa
+    row.two_fa = ''
+  }
+
+  if (row.two_fa_code && !isLikelyAccountTwoFa(row.two_fa_code) && !row.email_password && row.email) {
+    row.email_password = String(row.two_fa_code).trim()
+    row.two_fa_code = ''
+  }
+
+  return row
+}
+
+function parsePlainCredentialLine(line: string, sep: string) {
+  const parts = line.split(sep).map((p) => p.trim())
+  const row: Record<string, any> = {
+    username: parts[0] || '',
+    password: parts[1] || '',
+  }
+
+  for (const part of parts.slice(2)) {
+    if (!part) continue
+    if (isLikelyExtraCredentialValue(part)) {
+      addAccountExtraInfo(row, 'extra', part)
+    } else if (isLikelyAccountEmail(part)) {
+      if (!row.email) row.email = part
+      else if (!row.recovery_email) row.recovery_email = part
+      else addAccountExtraInfo(row, 'extra_email', part)
+    } else if (isLikelyAccountYear(part) && !row.year) {
+      row.year = part
+    } else if (/^\d+$/.test(part) && row.year && !row.friends_count) {
+      row.friends_count = part
+    } else if (isLikelyAccountTwoFa(part) && !row.two_fa_code && row.email_password) {
+      row.two_fa_code = part
+    } else if (!row.email_password && (row.email || isLikelyAccountEmail(row.username))) {
+      row.email_password = part
+    } else {
+      addAccountExtraInfo(row, 'extra', part)
+    }
+  }
+
+  return normalizeParsedAccountRow(row)
+}
+
+export function detectAccountImportMode(firstLine: string, formatKey?: string): 'explicit' | 'csv' | 'pipe' | 'colon' | 'unknown' {
+  if (formatKey && SITE_FORMATS[formatKey]) return 'explicit'
+  const csvFields = parseCsvLine(firstLine).map(value => value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, ''))
+  const loginHeaders = new Set(['username', 'user', 'user_name', 'login', 'account', 'account_username', 'email', 'mail', 'email_address', 'account_email'])
+  const passwordHeaders = new Set(['password', 'pass', 'account_password'])
+  const validCsvHeader = csvFields.some(value => loginHeaders.has(value)) && csvFields.some(value => passwordHeaders.has(value))
+  const startsLikeCsvHeader = loginHeaders.has(csvFields[0]) || passwordHeaders.has(csvFields[0])
+  if (firstLine.includes(',') && (validCsvHeader || startsLikeCsvHeader)) return 'csv'
+  // A comma inside a TXT password must not turn the first credential row into CSV headers.
+  if (firstLine.includes('|')) return 'pipe'
+  if (firstLine.includes(':')) return 'colon'
+  if (firstLine.includes(',')) return 'csv'
+  return 'unknown'
+}
+
+export function parseCSV(csvText: string, formatKey?: string): any[] {
+  const lines = csvText
+    .replace(/^\uFEFF/, '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+  if (lines.length === 0) return []
+
+  // \u2500\u2500 Explicit format override \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  if (formatKey && SITE_FORMATS[formatKey]) {
+    const fmt = SITE_FORMATS[formatKey]
+    return lines.map(line => {
+      const parts = line.split(fmt.sep).map((p: string) => p.trim())
+      const obj: Record<string, any> = {}
+      fmt.fields.forEach((field, i) => { obj[field] = parts[i] || '' })
+      for (let i = fmt.fields.length; i < parts.length; i += 1) {
+        if (parts[i]) addAccountExtraInfo(obj, 'extra', parts[i])
+      }
+      return normalizeParsedAccountRow(obj)
+    }).filter((r: Record<string, string>) => r.username || r.password)
+  }
+
+  // \u2500\u2500 TXT / plain-credential format detection \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  const mode = detectAccountImportMode(lines[0])
+  if (mode === 'pipe' || mode === 'colon') {
+    const sep = mode === 'pipe' ? '|' : ':'
+    return lines.map(line => parsePlainCredentialLine(line, sep)).filter(r => r.username || r.password)
+  }
+
+  // \u2500\u2500 CSV format: requires at least header + one data row \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  if (mode !== 'csv' || lines.length < 2) return []
+
+  const normalizeHeader = (header: string) => {
+    const key = header
+      .trim()
+      .toLowerCase()
+      .replace(/^\uFEFF/, '')
+      .replace(/\\+_/g, '_')
+      .replace(/\\/g, '')
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+    const aliases: Record<string, string> = {
+      user: 'username',
+      user_name: 'username',
+      login: 'username',
+      account: 'username',
+      account_username: 'username',
+      mail: 'email',
+      email_address: 'email',
+      account_email: 'email',
+      pass: 'password',
+      account_password: 'password',
+      email_pass: 'email_password',
+      mail_password: 'email_password',
+      emailpassword: 'email_password',
+      twofa: 'two_fa_code',
+      two_fa: 'two_fa_code',
+      two_factor: 'two_fa_code',
+      two_factor_code: 'two_fa_code',
+      authenticator: 'two_fa_code',
+      authenticator_code: 'two_fa_code',
+      recovery_mail: 'recovery_email',
+      recovery_email_address: 'recovery_email',
+      recovery_pass: 'recovery_email_password',
+      recovery_mail_password: 'recovery_email_password',
+    }
+    return aliases[key] || key
+  }
+
+  const headers = parseCsvLine(lines[0]).map(normalizeHeader)
+  if (!headers.includes('password') || (!headers.includes('username') && !headers.includes('email'))) return []
   const rows = lines.slice(1)
 
   return rows.map(row => {
-    const values = row.split(',').map(v => v.trim())
+    const values = parseCsvLine(row)
     const obj: any = {}
-    
+
     headers.forEach((header, index) => {
       obj[header] = values[index] || ''
     })
-    
-    return obj
+
+    return normalizeParsedAccountRow(obj)
   })
 }
 
@@ -709,8 +1724,6 @@ export async function processBulkAccountUpload(
   productGroupId: string
 ): Promise<{ success: boolean; accountsCreated: number; error?: string }> {
   try {
-    console.log('📤 Processing bulk account upload for product group:', productGroupId)
-
     if (!csvData || csvData.length === 0) {
       return { success: false, accountsCreated: 0, error: 'No account data provided' }
     }
@@ -738,7 +1751,7 @@ export async function processBulkAccountUpload(
     for (const row of csvData) {
       // Skip rows without required data
       if (!row.password || (!row.email && !row.username)) {
-        console.warn('Skipping row with missing required data:', row)
+        console.warn('Skipping CSV row with missing required account data.')
         continue
       }
 
@@ -749,7 +1762,9 @@ export async function processBulkAccountUpload(
         email: row.email || undefined,
         email_password: row.email_password || undefined,
         two_fa_code: row.two_fa || row.two_fa_code || undefined,
-        additional_info: null,
+        recovery_email: row.recovery_email || undefined,
+        recovery_email_password: row.recovery_email_password || undefined,
+        additional_info: row.additional_info || null,
         status: 'available'
       }
 
@@ -768,10 +1783,16 @@ export async function processBulkAccountUpload(
     }
 
     // Update product group stock count
-    await updateProductGroupStock(productGroupId)
+    const stockUpdated = await updateProductGroupStock(productGroupId)
 
-    console.log(`✅ Successfully created ${createdAccounts.length} accounts`)
-    
+    if (!stockUpdated) {
+      return {
+        success: false,
+        accountsCreated: createdAccounts.length,
+        error: `${createdAccounts.length} accounts were added, but stock count failed to refresh`,
+      }
+    }
+
     return { 
       success: true, 
       accountsCreated: createdAccounts.length,
@@ -796,55 +1817,45 @@ export async function processBulkAccountUpload(
 // Get user's wallet balance
 export async function getUserWalletBalance(userId: string): Promise<number> {
   try {
-    const { data, error } = await supabase
-      .from('profiles')
-      .select('wallet_balance')
-      .eq('id', userId)
-      .single()
+    const { data: session } = await supabase.auth.getUser()
+    if (session.user?.id !== userId) return 0
+    const { data, error } = await supabase.rpc('get_my_wallet_available')
 
     if (error) {
       console.error('Error fetching wallet balance:', error)
       return 0
     }
 
-    return data?.wallet_balance || 0
+    const amount = Number(data)
+    return Number.isFinite(amount) && amount >= 0 ? amount : 0
   } catch (error) {
     console.error('Error getting wallet balance:', error)
     return 0
   }
 }
 
-// Update user's wallet balance (add amount)
-export async function updateUserWalletBalance(userId: string, amountToAdd: number): Promise<boolean> {
-  try {
-    // Get current balance
-    const currentBalance = await getUserWalletBalance(userId)
-    const newBalance = currentBalance + amountToAdd
-
-    const { error } = await supabase
-      .from('profiles')
-      .update({ wallet_balance: newBalance })
-      .eq('id', userId)
-
-    if (error) {
-      console.error('❌ Error updating wallet balance:', error)
-      throw error
-    }
-
-    console.log(`✅ Wallet updated: ${userId} +₦${amountToAdd} (New balance: ₦${newBalance})`)
-    return true
-  } catch (error) {
-    console.error('❌ Failed to update wallet balance:', error)
-    return false
-  }
+/**
+ * @deprecated SECURITY RISK - DO NOT USE
+ * This function has been replaced by the verify-and-credit-wallet Edge Function.
+ * Use verifyAndCreditWalletSecure() instead.
+ * This function will be removed in a future update.
+ */
+export async function updateUserWalletBalance(
+  _userId: string,
+  _amountToAdd: number,
+  _reference?: string,
+  _ercasReference?: string
+): Promise<boolean> {
+  console.warn('Legacy client-side wallet credit is disabled. Use verifyAndCreditWalletSecure().')
+  return false
 }
 
 // Get available account for purchase
-export async function getAvailableAccount(productGroupId: string): Promise<IndividualAccount | null> {
+export async function getAvailableAccount(productGroupId: string): Promise<PublicAccount | null> {
   try {
     const { data, error } = await supabase
-      .from('individual_accounts')
-      .select('*')
+      .from('individual_accounts_public')
+      .select('id, product_group_id, status, created_at')
       .eq('product_group_id', productGroupId)
       .eq('status', 'available')
       .limit(1)
@@ -862,12 +1873,194 @@ export async function getAvailableAccount(productGroupId: string): Promise<Indiv
   }
 }
 
+// Generate idempotency key for preventing duplicate purchases
+function generateIdempotencyKey(userId: string, productGroupId: string, quantity: number): string {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 10);
+  return `purchase_${userId.substring(0, 8)}_${productGroupId.substring(0, 8)}_${quantity}_${timestamp}_${random}`;
+}
+
+// SECURE: Process purchase via Edge Function (server-side)
+export async function processPurchaseSecure(
+  productGroupId: string,
+  quantity: number,
+  discountCode?: string,
+  croContext?: {
+    experimentId?: string | null
+    variantId?: string | null
+    assignmentMode?: string | null
+    revenueContext?: Record<string, unknown> | null
+  },
+  preferredAccountId?: string | null,
+  expectedAmountNgn?: number,
+  clientIdempotencyKey?: string,
+): Promise<{ success: boolean; error?: string; code?: string; retry_safe?: boolean; order_id?: string; amount?: number; new_balance?: number; product_name?: string; reward_code?: string; account_details?: PurchaseAccountDetails; accounts?: PurchasedAccountCredentials[] }> {
+  // functions-js in this project ignores an invoke-level AbortSignal. Race the
+  // whole wait against one deadline, and preserve the caller's idempotency key
+  // so an uncertain purchase is never retried automatically.
+  const timedOut = Symbol('purchase-timeout')
+  let deadlineExpired = false
+  let timeoutId: number | undefined
+  const deadline = new Promise<typeof timedOut>(resolve => {
+    timeoutId = window.setTimeout(() => { deadlineExpired = true; resolve(timedOut) }, 45_000)
+  })
+  try {
+    // Get current session for user ID
+    const sessionResult = await Promise.race([supabase.auth.getSession(), deadline])
+    if (sessionResult === timedOut || deadlineExpired) return { success: false, error: 'Purchase status could not be confirmed. Check your order history before trying again.', code: 'PURCHASE_STATUS_UNKNOWN' }
+    const { data: { session } } = sessionResult
+    if (!session?.user?.id) {
+      return { success: false, error: 'Not authenticated' };
+    }
+
+    const idempotencyKey = clientIdempotencyKey || generateIdempotencyKey(session.user.id, productGroupId, quantity);
+
+    const invokeResult = await Promise.race([supabase.functions.invoke('process-purchase', {
+      body: {
+        product_group_id: productGroupId,
+        quantity: quantity,
+        idempotency_key: idempotencyKey,
+        discount_code: discountCode || undefined,
+        cro_context: croContext || undefined,
+        revenue_context: croContext?.revenueContext || undefined,
+        preferred_account_id: preferredAccountId || undefined,
+        expected_amount_ngn: expectedAmountNgn,
+      },
+    }), deadline])
+    if (invokeResult === timedOut || deadlineExpired) return { success: false, error: 'Purchase status could not be confirmed. Check your order history before trying again.', code: 'PURCHASE_STATUS_UNKNOWN' }
+    const { data, error } = invokeResult
+
+    if (error) {
+      console.error('Purchase response could not be confirmed.');
+      const context = error.context as any;
+      let payload: any = null;
+      try {
+        if (context instanceof Response) {
+          const parsed = await Promise.race([context.clone().json(), deadline])
+          if (parsed === timedOut || deadlineExpired) return { success: false, error: 'Purchase status could not be confirmed. Check your order history before trying again.', code: 'PURCHASE_STATUS_UNKNOWN' }
+          payload = parsed
+        }
+        else if (typeof context?.body === 'string') payload = JSON.parse(context.body);
+        else if (context?.body && typeof context.body === 'object') payload = context.body;
+        else if (context && typeof context === 'object') payload = context;
+      } catch {
+        console.error('Purchase response could not be read.');
+      }
+      return {
+        success: false,
+        error: payload?.error || payload?.message || error.message || 'Purchase status unavailable',
+        code: payload?.code || (payload ? undefined : 'PURCHASE_STATUS_UNKNOWN'),
+        retry_safe: payload?.retry_safe === true,
+        order_id: payload?.order_id,
+      };
+    }
+
+    if (!data?.success) {
+      return { success: false, error: data?.error || 'Purchase failed', code: data?.code, retry_safe: data?.retry_safe === true, order_id: data?.order_id };
+    }
+
+    return {
+      success: true,
+      order_id: data.order_id,
+      amount: data.amount,
+      new_balance: data.new_balance,
+      product_name: data.product_name,
+      reward_code: data.reward_code,
+      account_details: data.account_details,
+      accounts: data.accounts,
+    };
+  } catch (error: any) {
+    console.error('Purchase status could not be confirmed.');
+    
+    // Try to extract meaningful error message
+    let errorMessage = 'An unexpected error occurred';
+    
+    if (error?.message) {
+      errorMessage = error.message;
+    }
+    
+    // For FunctionsHttpError, try to parse the response body
+    if (error?.context) {
+      try {
+        // Check for body in context
+        if (error.context.body) {
+          const body = typeof error.context.body === 'string' 
+            ? JSON.parse(error.context.body) 
+            : error.context.body;
+          if (body.error) {
+            errorMessage = body.error;
+          }
+        }
+        // Check for error directly in context
+        else if (error.context.error) {
+          errorMessage = error.context.error;
+        }
+      } catch {
+        console.error('Purchase error context could not be read.');
+      }
+    }
+    
+    return { success: false, error: errorMessage, code: 'PURCHASE_STATUS_UNKNOWN' };
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId)
+  }
+}
+
+// SECURE: Verify payment and credit wallet via Edge Function (server-side)
+export async function verifyAndCreditWalletSecure(
+  transactionReference: string,
+  ercasReference?: string
+): Promise<{ success: boolean; error?: string; amount?: number; new_balance?: number; already_processed?: boolean }> {
+  try {
+    if (/^KORA-[a-f0-9-]{36}$/.test(transactionReference)) {
+      const { data, error } = await supabase.functions.invoke('korapay-wallet', { body: { action: 'verify', reference: transactionReference } });
+      return error ? { success: false, error: 'Payment verification is unavailable.' } : data;
+    }
+    const { data, error } = await supabase.functions.invoke('verify-and-credit-wallet', {
+      body: {
+        transaction_reference: transactionReference,
+        ercas_reference: ercasReference,
+      },
+    });
+
+    if (error) {
+      console.error('❌ Edge Function error:', error);
+      let message = error.message || 'Verification failed';
+      const context = (error as any)?.context;
+      if (context && typeof context.json === 'function') {
+        try {
+          const body = await context.clone().json();
+          message = body?.error || body?.message || message;
+        } catch {
+          // Keep the Supabase client error if the function did not return JSON.
+        }
+      }
+      return { success: false, error: message };
+    }
+
+    if (!data?.success) {
+      return { success: false, error: data?.error || 'Verification failed' };
+    }
+
+    return {
+      success: true,
+      amount: data.amount,
+      new_balance: data.new_balance,
+      already_processed: data.already_processed,
+    };
+  } catch (error) {
+    console.error('❌ verifyAndCreditWalletSecure error:', error);
+    return { success: false, error: 'An unexpected error occurred' };
+  }
+}
+
 // Get multiple available accounts for bulk purchase
-export async function getAvailableAccounts(productGroupId: string, quantity: number): Promise<IndividualAccount[]> {
+// NOTE: This function is deprecated - accounts are now fetched server-side only
+export async function getAvailableAccounts(productGroupId: string, quantity: number): Promise<PublicAccount[]> {
   try {
     const { data, error } = await supabase
-      .from('individual_accounts')
-      .select('*')
+      .from('individual_accounts_public')
+      .select('id, product_group_id, status, created_at')
       .eq('product_group_id', productGroupId)
       .eq('status', 'available')
       .limit(quantity)
@@ -884,442 +2077,122 @@ export async function getAvailableAccounts(productGroupId: string, quantity: num
   }
 }
 
-// Process bulk purchase transaction (for quantity-based buying)
+/**
+ * @deprecated SECURITY RISK - DO NOT USE
+ * This function has been replaced by the process-purchase Edge Function.
+ * Use processPurchaseSecure() instead.
+ * This function will be removed in a future update.
+ */
 export async function processBulkPurchase(
-  userId: string, 
-  productGroupId: string,
-  quantity: number
+  _userId: string,
+  _productGroupId: string,
+  _quantity: number
 ): Promise<{ success: boolean; error?: string; orderData?: any; accounts?: IndividualAccount[] }> {
-  try {
-    console.log('🛒 Starting bulk purchase process for user:', userId, 'productGroup:', productGroupId, 'quantity:', quantity)
-
-    // 1. Get product group details for pricing
-    const { data: productGroup, error: productError } = await supabase
-      .from('product_groups')
-      .select('*, categories(name)')
-      .eq('id', productGroupId)
-      .single()
-
-    if (productError || !productGroup) {
-      console.error('Product group not found:', productError)
-      return { success: false, error: 'Product not found' }
-    }
-
-    // 2. Check if enough accounts are available
-    const availableAccounts = await getAvailableAccounts(productGroupId, quantity)
-    if (availableAccounts.length < quantity) {
-      return { 
-        success: false, 
-        error: `Only ${availableAccounts.length} accounts available, but ${quantity} requested` 
-      }
-    }
-
-    // 3. Check user wallet balance
-    const totalPrice = productGroup.price * quantity
-    const walletBalance = await getUserWalletBalance(userId)
-    if (walletBalance < totalPrice) {
-      return { success: false, error: 'Insufficient wallet balance' }
-    }
-
-    // 4. Reserve all selected accounts
-    const accountIds = availableAccounts.map(acc => acc.id)
-    const { error: reserveError } = await supabase
-      .from('individual_accounts')
-      .update({ status: 'reserved' })
-      .in('id', accountIds)
-      .eq('status', 'available')
-
-    if (reserveError) {
-      console.error('Failed to reserve accounts:', reserveError)
-      return { success: false, error: 'Failed to reserve accounts - some may have been sold to others' }
-    }
-
-    // 5. Deduct wallet balance
-    const { error: balanceError } = await supabase
-      .from('profiles')
-      .update({ 
-        wallet_balance: walletBalance - totalPrice,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', userId)
-
-    if (balanceError) {
-      // Rollback: unreserve the accounts
-      await supabase
-        .from('individual_accounts')
-        .update({ status: 'available' })
-        .in('id', accountIds)
-      
-      return { success: false, error: 'Failed to process payment' }
-    }
-
-    // 6. Create order record - using actual database schema
-    const orderData = {
-      user_id: userId,
-      product_group_id: productGroupId, // Changed back to product_group_id for foreign key
-      amount: totalPrice,
-      status: 'completed',
-      account_details: {
-        accounts: availableAccounts.map(acc => ({
-          username: acc.username,
-          password: acc.password,
-          email: acc.email,
-          email_password: acc.email_password,
-          two_fa_code: acc.two_fa_code,
-          additional_info: acc.additional_info
-        })),
-        product_name: productGroup.name,
-        category: productGroup.categories?.name,
-        quantity: quantity,
-        price_per_unit: productGroup.price
-      }
-    }
-
-    const { data: order, error: orderError } = await supabase
-      .from('orders')
-      .insert([orderData])
-      .select()
-      .single()
-
-    if (orderError) {
-      console.error('❌ Order creation failed:', orderError)
-      console.error('❌ Order data that failed:', orderData)
-      
-      // Rollback: restore wallet balance and unreserve accounts
-      await supabase
-        .from('profiles')
-        .update({ wallet_balance: walletBalance })
-        .eq('id', userId)
-      
-      await supabase
-        .from('individual_accounts')
-        .update({ status: 'available' })
-        .in('id', accountIds)
-      
-      return { success: false, error: `Failed to create order: ${orderError.message}` }
-    }
-
-    // 7. Mark accounts as sold
-    const { error: soldError } = await supabase
-      .from('individual_accounts')
-      .update({ 
-        status: 'sold',
-        sold_at: new Date().toISOString()
-      })
-      .in('id', accountIds)
-
-    if (soldError) {
-      console.error('Warning: Accounts not marked as sold, but purchase completed')
-    }
-
-    // 8. Update product group stock count
-    await updateProductGroupStock(productGroupId)
-
-    // 9. Record transaction
-    const newBalance = walletBalance - totalPrice
-    await supabase
-      .from('transactions')
-      .insert([{
-        user_id: userId,
-        type: 'purchase',
-        amount: -totalPrice,
-        balance_after: newBalance,
-        description: `Bulk Purchase: ${quantity}x ${productGroup.name}`,
-        reference: `ORD-${order.id.substring(0, 8).toUpperCase()}`
-      }])
-
-    console.log('✅ Bulk purchase completed successfully!')
-    
-    // Update product group stock count
-    await updateProductGroupStock(productGroupId)
-    
-    // Send credentials email automatically
-    try {
-      // Get user email for sending credentials
-      const { data: userProfile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', userId)
-        .single()
-
-      if (userProfile) {
-        // Get user auth data for email
-        const { data: { user } } = await supabase.auth.getUser()
-        
-        if (user?.email) {
-          const credentials = {
-            accounts: availableAccounts.map((account, index) => ({
-              accountNumber: index + 1,
-              username: account.username,
-              password: account.password,
-              email: account.email,
-              email_password: account.email_password,
-              two_fa_code: account.two_fa_code,
-              additional_info: account.additional_info
-            }))
-          }
-
-          await sendCredentialsEmail({
-            userEmail: user.email,
-            userName: user.email.split('@')[0],
-            credentials,
-            orderId: order.id
-          })
-          
-          console.log('✅ Credentials email sent automatically')
-        }
-      }
-    } catch (emailError) {
-      console.error('⚠️ Failed to send automatic credentials email:', emailError)
-      // Don't fail the purchase if email fails
-    }
-    
-    return { 
-      success: true, 
-      orderData: {
-        ...order,
-        product_name: productGroup.name,
-        category: productGroup.categories?.name
-      },
-      accounts: availableAccounts
-    }
-
-  } catch (error) {
-    console.error('❌ Bulk purchase processing error:', error)
-    return { success: false, error: 'Purchase failed. Please try again.' }
+  return {
+    success: false,
+    error: 'Legacy client-side purchase is disabled. Use secure checkout so stock, pricing, staff restrictions, and idempotency are enforced server-side.',
   }
 }
 
 // Process complete purchase transaction
 export async function processPurchase(
-  userId: string, 
-  accountId: string
+  _userId: string,
+  _accountId: string
 ): Promise<{ success: boolean; error?: string; orderData?: any }> {
+  return {
+    success: false,
+    error: 'Legacy client-side purchase is disabled. Use secure checkout so stock, pricing, staff restrictions, and idempotency are enforced server-side.',
+  }
+}
+
+function sanitizeOrderHistoryCredentialVisibility(order: any) {
+  if (String(order?.status || '').toLowerCase() === 'completed') return order
+
+  const details = order?.account_details && typeof order.account_details === 'object'
+    ? order.account_details
+    : {}
+
+  return {
+    ...order,
+    account_details: {
+      product_name: details.product_name || null,
+      category: details.category || null,
+      category_id: details.category_id || null,
+      quantity: details.quantity || order?.quantity || 1,
+      price_per_unit: details.price_per_unit || null,
+      original_total: details.original_total || null,
+    },
+  }
+}
+
+export type CustomerPurchaseAttemptStatus = {
+  state: 'unknown' | 'pending' | 'completed' | 'released' | 'review_required'
+  order_id?: string
+  quantity?: number
+  amount_ngn?: number
+}
+
+// This action reads authenticated ownership and committed financial evidence.
+// It never authorizes, sends to a supplier, captures, or releases funds.
+export async function getCustomerPurchaseAttemptStatus(productId: string, key: string, orderId?: string | null): Promise<CustomerPurchaseAttemptStatus> {
+  const timedOut = Symbol('purchase-status-timeout')
+  let timeoutId: number | undefined
+  const deadline = new Promise<typeof timedOut>(resolve => {
+    timeoutId = window.setTimeout(() => resolve(timedOut), 12000)
+  })
   try {
-    console.log('🛒 Starting purchase process for user:', userId, 'account:', accountId)
-
-    // 1. Get the specific account details
-    const { data: account, error: accountError } = await supabase
-      .from('individual_accounts')
-      .select('*')
-      .eq('id', accountId)
-      .eq('status', 'available')
-      .single()
-
-    if (accountError || !account) {
-      console.error('Account not found or not available:', accountError)
-      return { success: false, error: 'Account not found or no longer available' }
+    const result = await Promise.race([supabase.functions.invoke('process-purchase', {
+      body: { action: 'get_status', product_group_id: productId, idempotency_key: key, order_id: orderId || undefined },
+    }), deadline])
+    if (result === timedOut) return { state: 'unknown' }
+    const { data, error } = result
+    if (error || !data || !['unknown', 'pending', 'completed', 'released', 'review_required'].includes(data.state)) return { state: 'unknown' }
+    if (['completed', 'released'].includes(data.state) && (
+      typeof data.order_id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(data.order_id) ||
+      !Number.isInteger(data.quantity) || data.quantity < 1 ||
+      typeof data.amount_ngn !== 'number' || !Number.isFinite(data.amount_ngn) || data.amount_ngn <= 0
+    )) return { state: 'unknown' }
+    return { state: data.state,
+      order_id: typeof data.order_id === 'string' ? data.order_id : undefined,
+      quantity: Number.isInteger(data.quantity) && data.quantity > 0 ? data.quantity : undefined,
+      amount_ngn: typeof data.amount_ngn === 'number' && Number.isFinite(data.amount_ngn) && data.amount_ngn > 0 ? data.amount_ngn : undefined,
     }
-
-    // 2. Get product group details for pricing
-    const { data: productGroup, error: productError } = await supabase
-      .from('product_groups')
-      .select('*, categories(name)')
-      .eq('id', account.product_group_id)
-      .single()
-
-    if (productError || !productGroup) {
-      console.error('Product group not found:', productError)
-      return { success: false, error: 'Product details not found' }
-    }
-
-    // 3. Check user wallet balance
-    const walletBalance = await getUserWalletBalance(userId)
-    if (walletBalance < productGroup.price) {
-      return { success: false, error: 'Insufficient wallet balance' }
-    }
-
-    // 4. Reserve the account first (prevent double-selling)
-    const { error: reserveError } = await supabase
-      .from('individual_accounts')
-      .update({ status: 'reserved' })
-      .eq('id', accountId)
-      .eq('status', 'available') // Double-check it's still available
-
-    if (reserveError) {
-      console.error('Failed to reserve account:', reserveError)
-      return { success: false, error: 'Failed to reserve account - may have been purchased by someone else' }
-    }
-
-    // 5. Deduct wallet balance
-    const { error: balanceError } = await supabase
-      .from('profiles')
-      .update({ 
-        wallet_balance: walletBalance - productGroup.price,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', userId)
-
-    if (balanceError) {
-      // Rollback: unreserve the account
-      await supabase
-        .from('individual_accounts')
-        .update({ status: 'available' })
-        .eq('id', accountId)
-      
-      return { success: false, error: 'Failed to process payment' }
-    }
-
-    // 6. Create order record
-    const orderData = {
-      user_id: userId,
-      product_group_id: account.product_group_id, // Changed back to product_group_id
-      amount: productGroup.price,
-      status: 'completed',
-      account_details: {
-        username: account.username,
-        password: account.password,
-        email: account.email,
-        email_password: account.email_password,
-        two_fa_code: account.two_fa_code,
-        additional_info: account.additional_info,
-        product_name: productGroup.name,
-        category: productGroup.categories?.name,
-        quantity: 1,
-        price_per_unit: productGroup.price
-      }
-    }
-
-    const { data: order, error: orderError } = await supabase
-      .from('orders')
-      .insert([orderData])
-      .select()
-      .single()
-
-    if (orderError) {
-      console.error('❌ Single account order creation failed:', orderError)
-      console.error('❌ Order data that failed:', orderData)
-      
-      // Rollback: restore wallet balance and unreserve account
-      await supabase
-        .from('profiles')
-        .update({ wallet_balance: walletBalance })
-        .eq('id', userId)
-      
-      await supabase
-        .from('individual_accounts')
-        .update({ status: 'available' })
-        .eq('id', accountId)
-      
-      return { success: false, error: `Failed to create order: ${orderError.message}` }
-    }
-
-    // 7. Mark account as sold
-    const { error: soldError } = await supabase
-      .from('individual_accounts')
-      .update({ 
-        status: 'sold',
-        sold_at: new Date().toISOString()
-      })
-      .eq('id', accountId)
-
-    if (soldError) {
-      console.error('Warning: Account not marked as sold, but purchase completed')
-    }
-
-    // 8. Update product group stock count
-    await updateProductGroupStock(account.product_group_id)
-
-    // 9. Record transaction
-    const newBalance = walletBalance - productGroup.price
-    await supabase
-      .from('transactions')
-      .insert([{
-        user_id: userId,
-        type: 'purchase',
-        amount: -productGroup.price,
-        balance_after: newBalance,
-        description: `Purchase: ${productGroup.name}`,
-        reference: `ORD-${order.id.substring(0, 8).toUpperCase()}`
-      }])
-
-    console.log('✅ Purchase completed successfully!')
-    
-    // Update product group stock count
-    await updateProductGroupStock(account.product_group_id)
-    
-    // Send credentials email automatically
-    try {
-      // Get user email for sending credentials
-      const { data: userProfile } = await supabase
-        .from('profiles')
-        .select('id')
-        .eq('id', userId)
-        .single()
-
-      if (userProfile) {
-        // Get user auth data for email
-        const { data: { user } } = await supabase.auth.getUser()
-        
-        if (user?.email) {
-          const credentials = {
-            accounts: [{
-              accountNumber: 1,
-              username: account.username,
-              password: account.password,
-              email: account.email,
-              email_password: account.email_password,
-              two_fa_code: account.two_fa_code,
-              additional_info: account.additional_info
-            }]
-          }
-
-          await sendCredentialsEmail({
-            userEmail: user.email,
-            userName: user.email.split('@')[0],
-            credentials,
-            orderId: order.id
-          })
-          
-          console.log('✅ Credentials email sent automatically')
-        }
-      }
-    } catch (emailError) {
-      console.error('⚠️ Failed to send automatic credentials email:', emailError)
-      // Don't fail the purchase if email fails
-    }
-    
-    return { 
-      success: true, 
-      orderData: {
-        ...order,
-        product_name: productGroup.name,
-        category: productGroup.categories?.name
-      }
-    }
-
-  } catch (error) {
-    console.error('❌ Purchase processing error:', error)
-    return { success: false, error: 'Purchase failed. Please try again.' }
+  } catch {
+    return { state: 'unknown' }
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId)
   }
 }
 
 // Get user's order history
-export async function getUserOrders(userId: string): Promise<any[]> {
+export async function getUserOrders(userId: string, signal?: AbortSignal): Promise<any[]> {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  if (signal?.aborted) controller.abort()
+  else signal?.addEventListener('abort', abort, { once: true })
+  const timeout = setTimeout(abort, 12000)
   try {
     const { data, error } = await supabase
-      .from('orders')
-      .select(`
-        *,
-        product_groups(name, categories(name))
-      `)
+      .from('orders_safe_history' as any)
+      .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false })
+      .abortSignal(controller.signal)
 
-    if (error) {
-      console.error('Error fetching user orders:', error)
-      return []
-    }
-
-    return data || []
-  } catch (error) {
-    console.error('Error getting user orders:', error)
-    return []
+    if (error || !Array.isArray(data)) throw new Error('orders_history_unavailable')
+    return data.map(sanitizeOrderHistoryCredentialVisibility)
+  } catch {
+    // A failed request is not an empty order history. Never log credential rows
+    // or forward database errors to a customer-facing error message.
+    throw new Error('orders_history_unavailable')
+  } finally {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
   }
 }
 
 // Get user transactions
-export async function getUserTransactions(userId: string): Promise<any[]> {
+export async function getUserTransactions(userId: string, throwOnError = false): Promise<any[]> {
   try {
     const { data, error } = await supabase
       .from('transactions')
@@ -1329,72 +2202,40 @@ export async function getUserTransactions(userId: string): Promise<any[]> {
 
     if (error) {
       console.error('Error fetching user transactions:', error)
+      if (throwOnError) throw error
       return []
     }
 
     return data || []
   } catch (error) {
     console.error('Error getting user transactions:', error)
+    if (throwOnError) throw error
     return []
   }
 }
 
 // Record a wallet top-up transaction
 export async function recordTopUpTransaction(
-  userId: string, 
-  amount: number, 
-  reference: string, 
-  ercasReference?: string
+  _userId: string,
+  _amount: number,
+  _reference: string,
+  _ercasReference?: string
 ): Promise<boolean> {
-  try {
-    // Get current balance to calculate balance_after
-    const currentBalance = await getUserWalletBalance(userId);
-    
-    const transactionData = {
-      user_id: userId,
-      type: 'topup' as const,
-      amount: amount,
-      status: 'completed', // Add status field to match purchase transactions
-      balance_after: currentBalance, // Add this field to match purchase transactions
-      description: `Wallet top-up via Ercas Pay`, // Add description
-      reference: reference,
-      ercas_reference: ercasReference
-    };
-
-    console.log('📝 Attempting to record transaction:', transactionData);
-
-    const { data, error } = await supabase
-      .from('transactions')
-      .insert([transactionData]) // Use array format like purchase transactions
-      .select() // Get the inserted record back
-
-    if (error) {
-      console.error('❌ Detailed transaction error:', {
-        error,
-        code: error.code,
-        message: error.message,
-        details: error.details,
-        hint: error.hint,
-        data: transactionData
-      });
-      throw error
-    }
-
-    console.log(`✅ Top-up transaction recorded successfully:`, data)
-    console.log(`✅ Summary: User ${userId} +₦${amount} (${reference})`)
-    return true
-  } catch (error) {
-    console.error('❌ Failed to record top-up transaction:', error)
-    return false
-  }
+  console.warn('Legacy client-side top-up transaction insertion is disabled. Use verifyAndCreditWalletSecure() or provider webhooks.')
+  return false
 }
 
-// Get individual account by ID
-export async function getIndividualAccountById(accountId: string): Promise<IndividualAccount | null> {
+// Get individual account by ID. Reads from individual_accounts_public (a
+// safe view; request only non-credential fields here)
+// since this is used for pre-purchase browsing (Product Detail / Checkout
+// preview) where the actual credentials must never be fetched client-side.
+// Run supabase/migrations/20260624000000_add_individual_accounts_public_view.sql
+// in Supabase for this view to exist.
+export async function getIndividualAccountById(accountId: string): Promise<PublicAccount | null> {
   try {
     const { data, error } = await supabase
-      .from('individual_accounts')
-      .select('*')
+      .from('individual_accounts_public')
+      .select('id, product_group_id, status, created_at')
       .eq('id', accountId)
       .eq('status', 'available')
       .single()
@@ -1416,7 +2257,7 @@ export async function getProductGroupById(productGroupId: string): Promise<Produ
   try {
     const { data, error } = await supabase
       .from('product_groups')
-      .select('*, categories(name)')
+      .select(`${PUBLIC_PRODUCT_GROUP_COLUMNS}, categories(name)`)
       .eq('id', productGroupId)
       .eq('is_active', true)
       .single()
@@ -1426,7 +2267,7 @@ export async function getProductGroupById(productGroupId: string): Promise<Produ
       return null
     }
 
-    return data
+    return { ...data, categories: Array.isArray(data.categories) ? data.categories[0] : data.categories }
   } catch (error) {
     console.error('Error getting product group:', error)
     return null
@@ -1455,12 +2296,50 @@ export async function getCategoryById(categoryId: string): Promise<Category | nu
   }
 }
 
+// New profile columns must not become browser-visible through admin search by default.
+const ADMIN_USER_SEARCH_COLUMNS =
+  'id,email,full_name,created_at,updated_at,wallet_balance,is_admin,is_staff,account_suspended,suspension_reason,suspended_at,wallet_review_required'
+
+export type CustomerBalanceSort = 'balance_desc' | 'balance_asc' | 'joined_newest' | 'joined_oldest'
+export type CustomerBalanceRow = Pick<Profile, 'id' | 'wallet_balance' | 'created_at' | 'is_admin' | 'is_staff' | 'account_suspended' | 'wallet_review_required'> & {
+  email: string | null
+  full_name: string | null
+}
+
+export async function getCustomerBalancePage(
+  page: number,
+  pageSize: number,
+  sort: CustomerBalanceSort,
+  emailFilter = '',
+): Promise<{ rows: CustomerBalanceRow[]; total: number }> {
+  const orderByBalance = sort.startsWith('balance_')
+  let query = supabase
+    .from('profiles')
+    .select(ADMIN_USER_SEARCH_COLUMNS, { count: 'exact' })
+    .or('is_admin.eq.false,is_admin.is.null')
+    .or('is_staff.eq.false,is_staff.is.null')
+
+  const filter = emailFilter.trim().replace(/[%_]/g, '\\$&')
+  if (filter) query = query.ilike('email', `%${filter}%`)
+
+  const { data, count, error } = await query
+    .order(orderByBalance ? 'wallet_balance' : 'created_at', {
+      ascending: sort === 'balance_asc' || sort === 'joined_oldest',
+      nullsFirst: false,
+    })
+    .order('id', { ascending: true })
+    .range(page * pageSize, (page + 1) * pageSize - 1)
+
+  if (error) throw error
+  return { rows: (data || []) as CustomerBalanceRow[], total: count || 0 }
+}
+
 // Get all users for admin dashboard
 export async function getAllUsers(): Promise<Profile[]> {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('*')
+      .select(ADMIN_USER_SEARCH_COLUMNS)
       .order('created_at', { ascending: false })
 
     if (error) {
@@ -1478,18 +2357,27 @@ export async function getAllUsers(): Promise<Profile[]> {
 // Get user count for admin dashboard
 export async function getUserCount(): Promise<number> {
   try {
-    const { count, error } = await supabase
-      .from('profiles')
-      .select('*', { count: 'exact', head: true })
+    const { data, error } = await supabase.rpc('get_customer_count')
 
     if (error) {
-      console.error('Error counting users:', error)
+      console.error('Error counting customers:', error)
       return 0
     }
 
-    return count || 0
+    return Number(data || 0)
   } catch (error) {
-    console.error('Error getting user count:', error)
+    console.error('Error getting customer count:', error)
+    return 0
+  }
+}
+
+export async function getPublicOrderCount(): Promise<number> {
+  try {
+    const { data, error } = await supabase.rpc('get_public_customer_order_count')
+    if (error) throw error
+    return Number(data || 0)
+  } catch (error) {
+    console.error('Error counting public orders:', error)
     return 0
   }
 }
@@ -1497,22 +2385,716 @@ export async function getUserCount(): Promise<number> {
 // Get admin sales statistics from orders table
 export async function getAdminSalesStats(): Promise<{ totalSales: number; totalRevenue: number }> {
   try {
-    const { data: orders, error } = await supabase
-      .from('orders')
-      .select('amount, status')
-      .eq('status', 'completed')
-
-    if (error) {
-      console.error('Error fetching sales stats:', error)
-      return { totalSales: 0, totalRevenue: 0 }
+    const { data: rpcData, error: rpcError } = await supabase.rpc('get_customer_sales_stats')
+    if (!rpcError && Array.isArray(rpcData) && rpcData[0]) {
+      return {
+        totalSales: Number(rpcData[0].total_sales || 0),
+        totalRevenue: Number(rpcData[0].total_revenue || 0),
+      }
     }
-
-    const totalSales = orders?.length || 0
-    const totalRevenue = orders?.reduce((sum, order) => sum + (order.amount || 0), 0) || 0
-
-    return { totalSales, totalRevenue }
+    if (rpcError) console.warn('Customer sales stats RPC unavailable:', rpcError.message)
+    return { totalSales: 0, totalRevenue: 0 }
   } catch (error) {
     console.error('Error getting admin sales stats:', error)
     return { totalSales: 0, totalRevenue: 0 }
+  }
+}
+
+// ==================== USER MANAGEMENT FUNCTIONS ====================
+
+// Search users by id, email, name, or virtual account number.
+export async function searchUsers(query: string) {
+  try {
+    const cleanedQuery = String(query || '').trim()
+    if (!cleanedQuery) {
+      return getAllUsers()
+    }
+
+    const rowsById = new Map<string, any>()
+    const addRows = (rows?: any[] | null) => {
+      for (const row of rows || []) {
+        if (row?.id) rowsById.set(row.id, row)
+      }
+    }
+
+    const searchErrors: unknown[] = []
+    const runSearch = async (builder: any) => {
+      const { data, error } = await builder
+      if (error) {
+        searchErrors.push(error)
+        console.warn('User search lookup failed:', error)
+        return
+      }
+      addRows(data)
+    }
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cleanedQuery)
+    if (isUuid) {
+      await runSearch(
+        supabase
+          .from('profiles')
+          .select(ADMIN_USER_SEARCH_COLUMNS)
+          .eq('id', cleanedQuery)
+          .limit(1),
+      )
+    }
+
+    const likeQuery = cleanedQuery.replace(/[%_]/g, '\\$&')
+    await Promise.all([
+      runSearch(supabase.from('profiles').select(ADMIN_USER_SEARCH_COLUMNS).ilike('email', `%${likeQuery}%`).limit(50)),
+      runSearch(supabase.from('profiles').select(ADMIN_USER_SEARCH_COLUMNS).ilike('full_name', `%${likeQuery}%`).limit(50)),
+      runSearch(supabase.from('profiles').select(ADMIN_USER_SEARCH_COLUMNS).eq('pocketfi_account_number', cleanedQuery).limit(50)),
+    ])
+
+    if (rowsById.size === 0 && searchErrors.length >= 3) {
+      throw searchErrors[0]
+    }
+
+    return Array.from(rowsById.values())
+      .sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())
+      .slice(0, 100)
+  } catch (error) {
+    console.error('Error in searchUsers:', error)
+    throw error
+  }
+}
+
+// SECURE: Admin adjust user wallet/crypto balance via Edge Function
+// Admin-triggered one-off live purchase, used by the "Test Stock" button on
+// a newly-accepted product suggestion (or any product with a provider ID
+// set). Separate from accepting a suggestion so spending is always its own
+// explicit click - see manual-restock/index.ts for the actual buy logic.
+export async function manualRestock(
+  productGroupId: string,
+  quantity: number,
+): Promise<{ success: boolean; bought?: number; error?: string; attempts?: any[] }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('manual-restock', {
+      body: { product_group_id: productGroupId, quantity },
+    })
+
+    if (error) {
+      return { success: false, error: error.message || 'Failed to reach manual-restock function' }
+    }
+
+    return data
+  } catch (error) {
+    console.error('❌ manualRestock failed:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'Manual restock failed' }
+  }
+}
+
+export async function adminAdjustBalance(
+  userId: string,
+  amount: number,
+  reason: string,
+  _adminEmail: string, // Kept for backwards compatibility, but verified server-side
+  balanceType: 'wallet' | 'crypto' = 'wallet'
+): Promise<{ success: boolean; newBalance: number; previousBalance?: number }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('admin-adjust-balance', {
+      body: {
+        target_user_id: userId,
+        adjustment_amount: amount,
+        balance_type: balanceType,
+        reason: reason,
+        idempotency_key: `admin-${userId}-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      },
+    });
+
+    if (error) {
+      console.error('Admin adjust balance Edge Function error:', error);
+      let message = error.message || 'Failed to adjust balance';
+      const context = (error as any)?.context;
+      if (context && typeof context.json === 'function') {
+        try {
+          const body = await context.clone().json();
+          message = body?.error || body?.message || message;
+        } catch {
+          // Keep the Supabase client error if the function did not return JSON.
+        }
+      }
+      throw new Error(message);
+    }
+
+    if (!data.success) {
+      throw new Error(data.error || 'Balance adjustment failed');
+    }
+
+    return { 
+      success: true, 
+      newBalance: data.new_balance,
+      previousBalance: data.previous_balance
+    };
+  } catch (error) {
+    console.error('Error in adminAdjustBalance:', error);
+    throw error;
+  }
+}
+
+export async function adminRecordLedgerCredit(
+  userId: string,
+  amount: number,
+  reason: string,
+): Promise<{ success: boolean; transaction?: any; currentBalance?: number }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('admin-adjust-balance', {
+      body: {
+        action: 'record_ledger_credit',
+        target_user_id: userId,
+        amount,
+        reason,
+        idempotency_key: `admin-ledger-repair-${userId}-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+      },
+    })
+
+    if (error) {
+      let message = error.message || 'Failed to record ledger credit'
+      const context = (error as any)?.context
+      if (context && typeof context.json === 'function') {
+        try {
+          const body = await context.clone().json()
+          message = body?.error || body?.message || message
+        } catch {
+          // Keep Supabase client error.
+        }
+      }
+      throw new Error(message)
+    }
+
+    if (!data?.success) throw new Error(data?.error || 'Ledger credit repair failed')
+
+    return {
+      success: true,
+      transaction: data.transaction,
+      currentBalance: data.current_balance,
+    }
+  } catch (error) {
+    console.error('Error in adminRecordLedgerCredit:', error)
+    throw error
+  }
+}
+
+export type AdminErcasRecoveryResult = {
+  success: boolean
+  status?: string
+  alreadyProcessed?: boolean
+  amount?: number
+  newBalance?: number
+  error?: string
+  auditOutcomeRecorded?: boolean
+}
+
+export async function adminRecoverErcasPayment(
+  userId: string,
+  transactionReference: string,
+  reason: string,
+): Promise<AdminErcasRecoveryResult> {
+  const { data, error } = await supabase.functions.invoke('admin-adjust-balance', {
+    body: {
+      action: 'recover_ercas_payment',
+      target_user_id: userId,
+      transaction_reference: transactionReference,
+      reason,
+    },
+  })
+  let result = data as Record<string, unknown> | null
+  if (error) {
+    const context = (error as any)?.context
+    if (context && typeof context.json === 'function') {
+      result = await context.clone().json().catch(() => null)
+    }
+    if (!result || typeof result !== 'object') {
+      throw new Error(error.message || 'Ercas payment recovery failed')
+    }
+  }
+  if (!result || typeof result !== 'object' || typeof result.success !== 'boolean') {
+    throw new Error('Ercas payment recovery response was incomplete')
+  }
+  return {
+    success: result.success,
+    status: typeof result.status === 'string' ? result.status : undefined,
+    alreadyProcessed: result.already_processed === true,
+    amount: Number.isFinite(Number(result.amount)) ? Number(result.amount) : undefined,
+    newBalance: Number.isFinite(Number(result.new_balance)) ? Number(result.new_balance) : undefined,
+    error: typeof result.error === 'string' ? result.error : undefined,
+    auditOutcomeRecorded: result.audit_outcome_recorded === true,
+  }
+}
+
+export async function adminRecordChargeback(
+  userId: string,
+  amount: number,
+  reason: string,
+  reference?: string,
+): Promise<{ success: boolean; transaction?: any; newBalance?: number; accountSuspended?: boolean }> {
+  try {
+    const cleanReference = reference?.trim()
+    if (!cleanReference || cleanReference.length < 3) {
+      throw new Error('A chargeback reference with at least 3 characters is required')
+    }
+
+    const { data, error } = await supabase.functions.invoke('admin-adjust-balance', {
+      body: {
+        action: 'record_chargeback',
+        target_user_id: userId,
+        amount,
+        reason,
+        reference: cleanReference,
+        idempotency_key: `chargeback-${userId}-${cleanReference}`,
+      },
+    })
+
+    if (error) {
+      let message = error.message || 'Failed to record chargeback'
+      const context = (error as any)?.context
+      if (context && typeof context.json === 'function') {
+        try {
+          const body = await context.clone().json()
+          message = body?.error || body?.message || message
+        } catch {
+          // Keep Supabase client error.
+        }
+      }
+      throw new Error(message)
+    }
+
+    if (!data?.success) throw new Error(data?.error || 'Chargeback recording failed')
+
+    return {
+      success: true,
+      transaction: data.transaction,
+      newBalance: data.new_balance,
+      accountSuspended: data.account_suspended,
+    }
+  } catch (error) {
+    console.error('Error in adminRecordChargeback:', error)
+    throw error
+  }
+}
+
+export async function adminUnsuspendUser(userId: string): Promise<{ success: boolean }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('admin-adjust-balance', {
+      body: {
+        action: 'unsuspend_user',
+        target_user_id: userId,
+      },
+    })
+
+    if (error) {
+      let message = error.message || 'Failed to unsuspend account'
+      const context = (error as any)?.context
+      if (context && typeof context.json === 'function') {
+        try {
+          const body = await context.clone().json()
+          message = body?.error || body?.message || message
+        } catch {
+          // Keep the Supabase client error if the function did not return JSON.
+        }
+      }
+      throw new Error(message)
+    }
+
+    if (!data?.success) {
+      throw new Error(data?.error || 'Failed to unsuspend account')
+    }
+
+    return { success: true }
+  } catch (error) {
+    console.error('Error in adminUnsuspendUser:', error)
+    throw error
+  }
+}
+
+export async function adminSuspendUser(userId: string, reason: string, evidenceReviewed: boolean): Promise<{ success: boolean }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('admin-adjust-balance', {
+      body: {
+        action: 'suspend_user',
+        target_user_id: userId,
+        reason,
+        evidence_reviewed: evidenceReviewed,
+      },
+    })
+
+    if (error) {
+      let message = error.message || 'Failed to suspend account'
+      const context = (error as any)?.context
+      if (context && typeof context.json === 'function') {
+        try {
+          const body = await context.clone().json()
+          message = body?.error || body?.message || message
+        } catch {
+          // Keep the Supabase client error if the function did not return JSON.
+        }
+      }
+      throw new Error(message)
+    }
+
+    if (!data?.success) {
+      throw new Error(data?.error || 'Failed to suspend account')
+    }
+
+    return { success: true }
+  } catch (error) {
+    console.error('Error in adminSuspendUser:', error)
+    throw error
+  }
+}
+
+// Get user's order history (admin view)
+export async function getUserOrdersAdmin(userId: string) {
+  try {
+    const { data, error } = await supabase
+      .from('orders_safe_history' as any)
+      .select('*')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('Error fetching user orders:', error)
+      throw error
+    }
+
+    return data || []
+  } catch (error) {
+    console.error('Error in getUserOrdersAdmin:', error)
+    throw error
+  }
+}
+
+// Legacy browser-side pending payment creation is disabled. Pending payments
+// must be created by create-wallet-topup so transaction references are bound
+// to the authenticated user before verification can credit a wallet.
+export async function createPendingPayment(params: {
+  userId: string;
+  transactionReference: string;
+  ercasReference?: string;
+  amount: number;
+}) {
+  console.warn('Legacy client-side pending payment creation is disabled.')
+  return null
+}
+
+// ============================================================
+// App settings (key/value store for admin-configurable values)
+// ============================================================
+
+export async function getAppSetting(key: string): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', key)
+      .maybeSingle()
+
+    if (error || !data) return null
+    return data.value
+  } catch (error) {
+    console.error(`Error getting app setting "${key}":`, error)
+    return null
+  }
+}
+
+export async function upsertAppSetting(key: string, value: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('app_settings')
+      .upsert({ key, value, updated_at: new Date().toISOString() }, { onConflict: 'key' })
+
+    if (error) {
+      console.error(`Error setting app setting "${key}":`, error)
+      return false
+    }
+    return true
+  } catch (error) {
+    console.error(`Error setting app setting "${key}":`, error)
+    return false
+  }
+}
+
+export async function getFavoriteProductGroupIds(): Promise<string[]> {
+  const raw = await getAppSetting('sales_favorite_product_group_ids')
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? parsed.map((id) => String(id)).filter(Boolean)
+      : []
+  } catch {
+    return raw
+      .split(',')
+      .map((id) => id.trim())
+      .filter(Boolean)
+  }
+}
+
+export async function setFavoriteProductGroupIds(productGroupIds: string[]): Promise<boolean> {
+  const uniqueIds = [...new Set(productGroupIds.map((id) => String(id).trim()).filter(Boolean))]
+  return upsertAppSetting('sales_favorite_product_group_ids', JSON.stringify(uniqueIds))
+}
+
+// ============================================================
+// Referral system
+// ============================================================
+
+// Generate a short, deterministic referral code from a user id
+export function generateReferralCode(userId: string): string {
+  return userId.replace(/-/g, '').substring(0, 8).toUpperCase()
+}
+
+// Legacy client-side referral attribution is disabled. Use the apply-referral
+// edge function after authentication so callers cannot choose arbitrary user ids.
+export async function applyReferralOnSignup(
+  _userId: string,
+  _referralCodeInput?: string
+): Promise<void> {
+  console.warn('Legacy client-side referral signup attribution is disabled.')
+}
+
+// Legacy client-side purchase referral rewards are disabled. Referral rewards
+// must be credited by server-side payment/deposit functions only.
+export async function rewardReferrerForPurchase(
+  _userId: string,
+  _orderAmount: number
+): Promise<void> {
+  console.warn('Legacy client-side referral purchase reward is disabled. Referral rewards must be credited by server-side payment functions.')
+}
+
+// Get a user's referral stats: their code, balance, and earnings history
+export async function getReferralStats(userId: string): Promise<{
+  referralCode: string | null
+  referralBalance: number
+  totalReferred: number
+  earnings: Array<{ id: string; order_amount: number; commission_amount: number; created_at: string }>
+}> {
+  try {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('referral_code, referral_balance')
+      .eq('id', userId)
+      .single()
+
+    const { data: earnings } = await supabase
+      .from('referral_earnings')
+      .select('id, order_amount, commission_amount, created_at')
+      .eq('referrer_id', userId)
+      .order('created_at', { ascending: false })
+
+    const { data: totalReferred } = await supabase.rpc('get_my_referral_count')
+
+    return {
+      referralCode: profile?.referral_code || null,
+      referralBalance: profile?.referral_balance || 0,
+      totalReferred: Number(totalReferred || 0),
+      earnings: earnings || []
+    }
+  } catch (error) {
+    console.error('Error getting referral stats:', error)
+    return { referralCode: null, referralBalance: 0, totalReferred: 0, earnings: [] }
+  }
+}
+
+// Move referral_balance into the user's main wallet_balance so it can be
+// spent or withdrawn through existing flows.
+//
+// This used to write directly to profiles.wallet_balance/referral_balance
+// from the browser. That update never errored but also never actually moved
+// anything - profiles RLS doesn't let authenticated users write their own
+// balance columns directly (same as every other balance change in this app),
+// so it silently touched 0 rows while still reporting success. Moved into
+// the withdraw-referral-balance edge function (service role) instead.
+export async function withdrawReferralBalance(_userId: string): Promise<{ success: boolean; error?: string; amount?: number }> {
+  try {
+    const { data, error } = await supabase.functions.invoke('withdraw-referral-balance', {
+      body: {},
+    })
+
+    if (error) {
+      let errorMessage = error.message || 'Failed to withdraw referral balance'
+      if (error.context && typeof error.context === 'object') {
+        const context = error.context as any
+        if (context.error) errorMessage = context.error
+        else if (context.message) errorMessage = context.message
+      }
+      return { success: false, error: errorMessage }
+    }
+
+    if (!data?.success) {
+      return { success: false, error: data?.error || 'Failed to withdraw referral balance' }
+    }
+
+    return { success: true, amount: data.amount }
+  } catch (error) {
+    console.error('Error withdrawing referral balance:', error)
+    return { success: false, error: 'Failed to withdraw referral balance' }
+  }
+}
+
+// Global "Recent Activity" social-proof feed item (masked, safe to show to
+// logged-out visitors too — see get_recent_activity_feed() in
+// add-global-activity-feed.sql for what's actually exposed).
+export interface GlobalActivityItem {
+  kind: 'deposit' | 'order'
+  maskedName: string
+  amount: number
+  label: string
+  createdAt: string
+}
+
+// Fetches real, masked site-wide activity via the get_recent_activity_feed
+// Postgres function (SECURITY DEFINER — never exposes raw user rows). Safe to
+// call from anon (logged-out) context.
+export async function getGlobalActivityFeed(limit = 12): Promise<GlobalActivityItem[]> {
+  try {
+    const { data, error } = await supabase.rpc('get_recent_activity_feed', { p_limit: limit })
+    if (error) throw error
+
+    return ((data || []) as Array<{
+      kind: 'deposit' | 'order'
+      masked_name: string
+      amount: number
+      label: string
+      created_at: string
+    }>).map((row) => ({
+      kind: row.kind,
+      maskedName: 'Customer',
+      amount: Number(row.amount) || 0,
+      label: row.label,
+      createdAt: row.created_at,
+    }))
+  } catch (error) {
+    console.error('Error loading global activity feed:', error)
+    return []
+  }
+}
+
+// Get total user count, formatted for stat displays (e.g. "1,204" or "12.3K")
+export function formatCount(n: number): string {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`
+  return n.toString()
+}
+
+// Used by PocketFi top-up polling: PocketFi credits the wallet via webhook
+// (webhook-pocketfi) rather than a client-callable verify endpoint, so the
+// client just checks whether a transaction row with this reference has shown up yet.
+export async function checkTransactionByReference(reference: string): Promise<{
+  found: boolean
+  amount?: number
+  status?: string
+}> {
+  try {
+    const { data, error } = await supabase
+      .from('transactions')
+      .select('amount, status')
+      .eq('reference', reference)
+      .maybeSingle()
+
+    if (error || !data) return { found: false }
+    return { found: true, amount: data.amount, status: data.status }
+  } catch (error) {
+    console.error('Error checking transaction by reference:', error)
+    return { found: false }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Discount codes / flash sales
+// ---------------------------------------------------------------------------
+
+export interface DiscountCode {
+  id: string
+  code: string
+  percent_off: number
+  category_id: string | null
+  product_group_id: string | null
+  max_uses: number | null
+  used_count: number
+  expires_at: string | null
+  is_active: boolean
+  created_at: string
+  max_order_amount?: number | null  // code only valid for orders ≤ this amount (NGN)
+  user_id?: string | null           // null = store-wide; set = single-user reward code
+  is_reward?: boolean               // true = auto-generated loyalty reward
+}
+
+export async function getDiscountCodes(): Promise<DiscountCode[]> {
+  try {
+    const { data, error } = await supabase.rpc('get_managed_discount_codes')
+    if (error) {
+      console.error('❌ Error fetching discount codes:', error)
+      return []
+    }
+    return data || []
+  } catch (error) {
+    console.error('❌ Failed to fetch discount codes:', error)
+    return []
+  }
+}
+
+export async function createDiscountCode(input: {
+  code: string
+  percent_off: number
+  category_id?: string | null
+  product_group_id?: string | null
+  max_uses?: number | null
+  expires_at?: string | null
+}): Promise<{ success: boolean; error?: string }> {
+  try {
+    const { error } = await supabase.from('discount_codes').insert({
+      code: input.code.trim().toUpperCase(),
+      percent_off: input.percent_off,
+      category_id: input.category_id || null,
+      product_group_id: input.product_group_id || null,
+      max_uses: input.max_uses || null,
+      expires_at: input.expires_at || null,
+    })
+    if (error) return { success: false, error: error.message }
+    return { success: true }
+  } catch (error) {
+    console.error('❌ Failed to create discount code:', error)
+    return { success: false, error: error instanceof Error ? error.message : 'Failed to create code' }
+  }
+}
+
+export async function setDiscountCodeActive(id: string, isActive: boolean): Promise<boolean> {
+  try {
+    const { error } = await supabase.from('discount_codes').update({ is_active: isActive }).eq('id', id)
+    return !error
+  } catch (error) {
+    console.error('❌ Failed to update discount code:', error)
+    return false
+  }
+}
+
+// Client-side preview only - this is NOT the source of truth for the actual
+// charge. The purchase edge function re-validates and re-applies the code
+// server-side before deducting wallet balance, so a tampered client value
+// here can never result in an incorrect charge.
+export async function previewDiscountCode(
+  code: string,
+  productGroupId: string,
+  _categoryId: string | null,
+  orderTotal?: number,
+): Promise<{ valid: boolean; percentOff?: number; error?: string }> {
+  if (!DISCOUNTS_ENABLED) return { valid: false, error: 'Discount codes are temporarily unavailable' }
+  if (!code.trim()) return { valid: false, error: 'Enter a code' }
+  try {
+    const { data, error } = await supabase.rpc('preview_discount_code', {
+      p_code: code.trim().toUpperCase(),
+      p_product_group_id: productGroupId,
+      p_order_total: orderTotal ?? null,
+    })
+    if (error || data?.valid !== true) return { valid: false, error: 'Invalid or expired code' }
+    const percentOff = Number(data.percent_off)
+    if (!Number.isFinite(percentOff) || percentOff < 1 || percentOff > 100) {
+      return { valid: false, error: 'Invalid or expired code' }
+    }
+    return { valid: true, percentOff }
+  } catch (error) {
+    console.error('❌ Failed to preview discount code:', error)
+    return { valid: false, error: 'Failed to validate code' }
   }
 }

@@ -1,0 +1,1904 @@
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
+
+async function applyWalletTransaction(
+  admin: any,
+  params: {
+    userId: string
+    type: string
+    amount: number
+    reference: string
+    description: string
+    idempotencyKey: string
+    metadata?: Record<string, unknown>
+    createdBy?: string
+  },
+) {
+  const { data, error } = await admin.rpc('apply_wallet_transaction', {
+    p_user_id: params.userId,
+    p_type: params.type,
+    p_amount: params.amount,
+    p_reference: params.reference,
+    p_description: params.description,
+    p_idempotency_key: params.idempotencyKey,
+    p_metadata: params.metadata || {},
+    p_currency: 'NGN',
+    p_balance_type: 'wallet',
+    p_external_payment_id: null,
+    p_created_by: params.createdBy || null,
+  })
+
+  if (error) throw new Error(error.message || 'Wallet transaction failed')
+  const result = data as any
+  if (!result?.success) throw new Error(result?.error || 'Wallet transaction failed')
+  return result
+}
+
+// ── Inlined shared modules (dashboard deploy cannot resolve _shared/) ──────────
+
+// ── smtp-client.ts ──
+/**
+ * SMTP Client for TallyStore Email Service
+ * Uses denomailer for Deno-native SMTP via Namecheap Private Email
+ */
+
+import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+
+// ── revenue-events.ts (inlined) ──
+export const REVENUE_EVENT_TYPES = [
+  'SESSION_STARTED',
+  'PAGE_VIEWED',
+  'PRODUCT_IMPRESSION',
+  'PRODUCT_VIEWED',
+  'SEARCHED',
+  'FILTER_USED',
+  'SORT_USED',
+  'PRODUCT_CLICKED',
+  'BUY_CLICKED',
+  'PAYMENT_STARTED',
+  'PAYMENT_PROVIDER_LOADED',
+  'PAYMENT_ATTEMPTED',
+  'PAYMENT_COMPLETED',
+  'PAYMENT_FAILED',
+  'PRODUCT_PURCHASED',
+  'PRODUCT_PURCHASE_REVERSED',
+  'PRODUCT_REJECTED',
+  'SMS_ORDER_CANCELLED',
+  'SMS_ORDER_COMPLETED',
+  'SMS_ORDER_REFUNDED',
+  'RECOMMENDATION_SHOWN',
+  'RECOMMENDATION_CLICKED',
+  'RECOMMENDATION_DISMISSED',
+  'PROMOTION_SHOWN',
+  'PROMOTION_CLICKED',
+  'OFFER_SHOWN',
+  'OFFER_ACCEPTED',
+  'OFFER_DISMISSED',
+  'CHAT_OPENED',
+  'CHAT_MESSAGE',
+  'CHAT_INTENT',
+  'CHAT_PRODUCT_SHOWN',
+  'SUPPORT_HANDOFF',
+  'CHECKOUT_ABANDONED',
+  'RETURN_VISIT',
+] as const
+
+export type RevenueEventType = (typeof REVENUE_EVENT_TYPES)[number]
+
+export type RevenueRequestContext = {
+  visitor_id?: string | null
+  session_id?: string | null
+  path?: string | null
+  referrer?: string | null
+  device?: string | null
+  display_currency?: string | null
+  attribution?: Record<string, unknown> | null
+  traffic_quality?: string | null
+}
+
+const knownRevenueEventTypes = new Set<string>(REVENUE_EVENT_TYPES as readonly string[])
+
+export function isKnownRevenueEventType(eventType: string): eventType is RevenueEventType {
+  return knownRevenueEventTypes.has(eventType)
+}
+
+export function sanitizeRevenueEventType(source: string, eventType: string): RevenueEventType | null {
+  if (!isKnownRevenueEventType(eventType)) {
+    console.warn(`Unsupported revenue event type from ${source}: ${eventType}`)
+    return null
+  }
+  return eventType
+}
+
+const SENSITIVE_REVENUE_METADATA_KEY = /(^|_|\b)(password|passcode|otp|pin|token|secret|api[_-]?key|authorization|cookie|session|email|phone|account[_-]?number|accountnumber|account[_-]?name|bank[_-]?name|wallet[_-]?address|pay[_-]?address|address|memo|tag|hash|reference|payment[_-]?reference|transaction[_-]?reference|transaction[_-]?id|payment[_-]?id|purchase[_-]?id|provider[_-]?request[_-]?id|provider[_-]?response|api[_-]?response|raw[_-]?response|response[_-]?body|activation[_-]?id|external[_-]?order[_-]?id|order[_-]?id|idempotency[_-]?key|recipient|username|login|profile[_-]?url|url|link|comment|comments|group|groups)(\b|_)?/i
+
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+export async function sanitizeRevenueEventId(source: string, eventId: string) {
+  const normalizedSource = source.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 48) || 'event'
+  const hash = await sha256Hex(`${source}:${eventId}`)
+  return `server:${normalizedSource}:${hash.slice(0, 48)}`
+}
+
+function sanitizeRevenueMetadataValue(value: unknown, depth = 0): unknown {
+  if (value == null) return value
+  if (depth > 4) return '[truncated]'
+
+  if (typeof value === 'number' || typeof value === 'boolean') return value
+
+  if (typeof value === 'string') {
+    const redacted = value
+      .replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted_url]')
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted_email]')
+      .replace(/(?:\+?\d[\s().-]*){10,}/g, '[redacted_number]')
+      .replace(/\b(?:[a-f0-9]{32,}|[A-Za-z0-9_-]{48,})\b/g, '[redacted_token]')
+    return redacted.length > 240 ? `${redacted.slice(0, 240)}...` : redacted
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 30).map((item) => sanitizeRevenueMetadataValue(item, depth + 1))
+  }
+
+  if (typeof value === 'object') {
+    const output: Record<string, unknown> = {}
+    for (const [key, child] of Object.entries(value as Record<string, unknown>).slice(0, 80)) {
+      output[key] = SENSITIVE_REVENUE_METADATA_KEY.test(key)
+        ? '[redacted]'
+        : sanitizeRevenueMetadataValue(child, depth + 1)
+    }
+    return output
+  }
+
+  return String(value)
+}
+
+export function sanitizeRevenueMetadata(metadata: Record<string, unknown> = {}) {
+  return sanitizeRevenueMetadataValue(metadata) as Record<string, unknown>
+}
+
+function cleanRevenueContextText(value: unknown, maxLength = 240) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed ? trimmed.slice(0, maxLength) : null
+}
+
+function cleanRevenueContextId(value: unknown) {
+  const text = cleanRevenueContextText(value, 120)
+  if (!text) return null
+  return /^[a-z0-9:_-]{8,120}$/i.test(text) ? text : null
+}
+
+function cleanRevenueContextPath(value: unknown) {
+  const text = cleanRevenueContextText(value, 240)
+  if (!text) return null
+  try {
+    const url = new URL(text, 'https://tallystore.local')
+    return url.pathname || '/'
+  } catch {
+    return text.split('?')[0].slice(0, 240) || null
+  }
+}
+
+function cleanRevenueContextReferrer(value: unknown) {
+  const text = cleanRevenueContextText(value, 240)
+  if (!text) return null
+  try {
+    const url = new URL(text)
+    return `${url.origin}${url.pathname || '/'}`.slice(0, 240)
+  } catch {
+    return null
+  }
+}
+
+export function sanitizeRevenueRequestContext(input: unknown): RevenueRequestContext {
+  const context = input && typeof input === 'object' ? input as Record<string, unknown> : {}
+  const device = cleanRevenueContextText(context.device, 40)
+  const displayCurrency = cleanRevenueContextText(context.display_currency, 12)
+  const trafficQuality = cleanRevenueContextText(context.traffic_quality, 40)
+  const attribution = context.attribution && typeof context.attribution === 'object'
+    ? sanitizeRevenueMetadata(context.attribution as Record<string, unknown>)
+    : null
+
+  return {
+    visitor_id: cleanRevenueContextId(context.visitor_id),
+    session_id: cleanRevenueContextId(context.session_id),
+    path: cleanRevenueContextPath(context.path),
+    referrer: cleanRevenueContextReferrer(context.referrer),
+    device: device && ['mobile', 'desktop', 'tablet', 'unknown'].includes(device.toLowerCase()) ? device.toLowerCase() : null,
+    display_currency: displayCurrency && /^[A-Z]{3,8}$/.test(displayCurrency) ? displayCurrency : null,
+    attribution,
+    traffic_quality: trafficQuality && /^[a-z_ -]{3,40}$/i.test(trafficQuality) ? trafficQuality.toLowerCase().replace(/\s+/g, '_') : null,
+  }
+}
+
+export function revenueContextEventColumns(context?: RevenueRequestContext | null) {
+  return {
+    visitor_id: context?.visitor_id || null,
+    session_id: context?.session_id || null,
+    path: context?.path || null,
+    referrer: context?.referrer || null,
+    device: context?.device || null,
+  }
+}
+
+export function revenueContextMetadata(context?: RevenueRequestContext | null) {
+  if (!context) return {}
+  return {
+    display_currency: context.display_currency || undefined,
+    attribution: context.attribution || undefined,
+    traffic_quality: context.traffic_quality || undefined,
+  }
+}
+
+
+const SMTP_HOST = "mail.privateemail.com";
+const SMTP_PORT = 465;
+
+function getCredentials() {
+  const email = Deno.env.get("SMTP_EMAIL");
+  const password = Deno.env.get("SMTP_PASSWORD");
+  if (!email || !password) {
+    throw new Error("SMTP_EMAIL and SMTP_PASSWORD must be set in Edge Function secrets");
+  }
+  return { email, password };
+}
+
+export async function sendEmail(options: {
+  to: string;
+  subject: string;
+  html: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const { email: fromEmail, password } = getCredentials();
+
+  try {
+    const client = new SMTPClient({
+      connection: {
+        hostname: SMTP_HOST,
+        port: SMTP_PORT,
+        tls: true,
+        auth: { username: fromEmail, password },
+      },
+    });
+
+    await client.send({
+      from: `TallyStore <${fromEmail}>`,
+      to: options.to,
+      subject: options.subject,
+      content: "auto",
+      html: options.html,
+    });
+
+    // Close connection, ignoring errors
+    try { await client.close() } catch { /* ignore */ }
+
+    return { success: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`SMTP send failed for ${options.to}: ${msg}`);
+    return { success: false, error: msg };
+  }
+}
+
+export async function sendEmailBulk(options: {
+  recipients: string[];
+  subject: string;
+  html: string;
+}): Promise<{ success: boolean; sent: number; failed: number; failedEmails: string[] }> {
+  const { recipients, subject, html } = options;
+  let sent = 0;
+  let failed = 0;
+  const failedEmails: string[] = [];
+
+  // Process in chunks of 10 concurrent connections
+  const CONCURRENCY = 10;
+  for (let i = 0; i < recipients.length; i += CONCURRENCY) {
+    const chunk = recipients.slice(i, i + CONCURRENCY);
+    const results = await Promise.allSettled(
+      chunk.map((to) => sendEmail({ to, subject, html }))
+    );
+
+    for (let j = 0; j < results.length; j++) {
+      const result = results[j];
+      if (result.status === "fulfilled" && result.value.success) {
+        sent++;
+      } else {
+        failed++;
+        failedEmails.push(chunk[j]);
+      }
+    }
+  }
+
+  return { success: true, sent, failed, failedEmails };
+}
+
+export function buildBroadcastHtml(message: string): string {
+  return `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
+    <div style="background:linear-gradient(135deg,#7c3aed,#3b82f6);padding:24px;border-radius:12px;color:white;text-align:center;margin-bottom:24px">
+      <h1 style="margin:0;font-size:24px">TallyStore</h1>
+    </div>
+    <div style="padding:16px;line-height:1.6;color:#333">
+      ${message.replace(/\n/g, "<br/>")}
+    </div>
+    <div style="text-align:center;margin-top:24px">
+      <a href="https://tallystore.org/dashboard"
+         style="background:linear-gradient(135deg,#7c3aed,#3b82f6);color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">
+        Go to Dashboard
+      </a>
+    </div>
+    <div style="text-align:center;margin-top:32px;color:#999;font-size:12px">
+      <p>TallyStore — Your trusted digital marketplace</p>
+    </div>
+  </div>`;
+}
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
+const DEFAULT_DAISY_BASE = 'https://daisysms.io/stubs/handler_api.php'
+const SMS_TERMINAL_STATUSES = ['completed', 'cancelled', 'failed', 'expired', 'refunded']
+
+type SupabaseAdmin = any
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
+
+class HttpError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.status = status
+  }
+}
+
+function optionalNaira(value: unknown) {
+  if (value === null || value === '') return null
+  const number = Math.round(Number(value))
+  return Number.isFinite(number) && number >= 0 ? number : null
+}
+
+async function recordRevenueEvent(
+  admin: SupabaseAdmin,
+  input: {
+    eventType: RevenueEventType
+    eventId: string
+    userId?: string | null
+    surface?: string
+    revenueContext?: RevenueRequestContext | null
+    metadata?: Record<string, unknown>
+  },
+) {
+  const eventType = sanitizeRevenueEventType('manage-staff', input.eventType)
+  if (!eventType) return
+
+  const { error } = await admin.from('revenue_events').upsert({
+    event_id: await sanitizeRevenueEventId('manage-staff', input.eventId),
+    event_type: eventType,
+    user_id: input.userId || null,
+    surface: input.surface || 'staff_admin',
+    metadata: sanitizeRevenueMetadata({
+      ...input.metadata,
+      ...revenueContextMetadata(input.revenueContext),
+      source: 'staff_approved_action',
+    }),
+  }, { onConflict: 'event_id', ignoreDuplicates: true })
+
+  if (error) {
+    console.error(`Failed to record staff revenue event ${eventType}:`, error.message)
+  }
+}
+
+async function recordSmsRefundRevenueEvents(
+  admin: SupabaseAdmin,
+  order: any,
+  amount: number,
+  refundRef: string,
+  reason: string,
+  alreadyRefunded = false,
+) {
+  const metadata = {
+    order_id: order.id,
+    reference: order.reference || order.id,
+    refund_reference: refundRef,
+    amount_ngn: amount,
+    service_code: order.service_id || null,
+    reason,
+    already_refunded: alreadyRefunded,
+  }
+
+  await recordRevenueEvent(admin, {
+    eventType: 'SMS_ORDER_REFUNDED',
+    eventId: `staff:sms:SMS_ORDER_REFUNDED:${order.id}:${refundRef}`,
+    userId: order.user_id,
+    surface: 'sms',
+    metadata,
+  })
+  await recordRevenueEvent(admin, {
+    eventType: 'PRODUCT_PURCHASE_REVERSED',
+    eventId: `staff:sms:PRODUCT_PURCHASE_REVERSED:${order.id}:${refundRef}`,
+    userId: order.user_id,
+    surface: 'sms',
+    metadata,
+  })
+}
+
+function buildEmailHtml(message: string) {
+  return `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
+    <div style="background:linear-gradient(135deg,#7c3aed,#3b82f6);padding:24px;border-radius:12px;color:white;text-align:center;margin-bottom:24px">
+      <h1 style="margin:0;font-size:24px">TallyStore</h1>
+    </div>
+    <div style="padding:16px;line-height:1.6;color:#333">
+      ${message.replace(/\n/g, '<br/>')}
+    </div>
+    <div style="text-align:center;margin-top:24px">
+      <a href="https://tallystore.org/dashboard" style="background:linear-gradient(135deg,#7c3aed,#3b82f6);color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">Go to Wallet</a>
+    </div>
+    <div style="text-align:center;margin-top:32px;color:#999;font-size:12px"><p>TallyStore - Your trusted digital marketplace</p></div>
+  </div>`
+}
+
+function normalizeEmail(value: unknown) {
+  const email = String(value || '').trim().toLowerCase()
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : ''
+}
+
+async function countPromotionConsentedCustomers(admin: any) {
+  const preferenceBatchSize = 500
+  const profileBatchSize = 75
+  let offset = 0
+  let total = 0
+
+  while (true) {
+    const { data: prefs, error: prefsError } = await admin
+      .from('customer_communication_preferences')
+      .select('user_id')
+      .eq('email_promotions_opt_in', true)
+      .order('user_id', { ascending: true })
+      .range(offset, offset + preferenceBatchSize - 1)
+    if (prefsError) throw new Error(prefsError.message)
+    if (!prefs || prefs.length === 0) break
+
+    const profileIds = prefs.map((pref: any) => pref.user_id).filter(Boolean)
+    for (let i = 0; i < profileIds.length; i += profileBatchSize) {
+      const { data: profiles, error: profilesError } = await admin
+        .from('profiles')
+        .select('id,email,is_admin,is_staff')
+        .in('id', profileIds.slice(i, i + profileBatchSize))
+      if (profilesError) throw new Error(profilesError.message)
+      for (const profile of profiles || []) {
+        if (profile.is_admin || profile.is_staff || !normalizeEmail(profile.email)) continue
+        total += 1
+      }
+    }
+
+    if (prefs.length < preferenceBatchSize) break
+    offset += preferenceBatchSize
+  }
+
+  return total
+}
+
+function isCompletedStatus(value: unknown) {
+  return ['complete', 'completed', 'success', 'successful', 'paid', 'finished', 'confirmed', 'delivered'].includes(String(value || '').toLowerCase())
+}
+
+function isDepositTransaction(row: any) {
+  const amount = Number(row?.amount || 0)
+  if (!Number.isFinite(amount) || amount <= 0) return false
+
+  const fields = [
+    row?.type,
+    row?.transaction_type,
+    row?.kind,
+    row?.category,
+    row?.description,
+    row?.reference,
+  ].map((value) => String(value || '').toLowerCase())
+
+  return fields.some((value) => [
+    'topup',
+    'top_up',
+    'top-up',
+    'wallet_topup',
+    'deposit',
+    'wallet_deposit',
+    'credit',
+    'admin_credit',
+    'staff_credit',
+  ].some((token) => value === token || value.includes(token)))
+}
+
+async function requireStaffReadPermission(admin: any, user: any, permissionKey: string) {
+  const { data: profile, error: profileError } = await admin
+    .from('profiles')
+    .select('id, email, is_admin, is_staff, account_suspended')
+    .eq('id', user.id)
+    .single()
+  if (profileError || !profile) throw new HttpError('Profile not found', 404)
+  if (profile.account_suspended === true) throw new HttpError('Account suspended', 403)
+
+  if (profile.is_admin === true) return profile
+  if (profile.is_staff !== true) throw new HttpError('Forbidden - staff only', 403)
+
+  const { data: permission, error: permissionError } = await admin
+    .from('staff_permissions')
+    .select('is_enabled')
+    .eq('user_id', user.id)
+    .eq('permission_key', permissionKey)
+    .maybeSingle()
+  if (permissionError) throw new Error(permissionError.message)
+  if (!permission?.is_enabled) throw new HttpError('Permission is not enabled', 403)
+  return profile
+}
+
+async function handleStaffCustomerSearch(admin: any, user: any, body: Record<string, unknown>) {
+  await requireStaffReadPermission(admin, user, 'tab_users')
+  const query = typeof body.query === 'string' ? body.query.trim() : ''
+  if (query.length < 3 || query.length > 120) {
+    return json({ error: 'Search requires 3 to 120 characters' }, 400)
+  }
+
+  const columns = 'id,email,full_name,wallet_balance,is_staff,is_admin,created_at'
+  const customerQuery = () => admin.from('profiles').select(columns)
+    .eq('is_staff', false).eq('is_admin', false)
+  const escaped = query.replace(/[\\%_]/g, '\\$&')
+  const searches = [
+    customerQuery().ilike('email', `%${escaped}%`).limit(50),
+    customerQuery().ilike('full_name', `%${escaped}%`).limit(50),
+    customerQuery().eq('pocketfi_account_number', query).limit(50),
+  ]
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(query)) {
+    searches.push(customerQuery().eq('id', query).limit(1))
+  }
+
+  const results = await Promise.all(searches)
+  if (results.some((result) => result.error)) throw new Error('Customer search unavailable')
+  const byId = new Map<string, Record<string, unknown>>()
+  for (const result of results) {
+    for (const row of result.data || []) {
+      if (row?.id && row.is_staff !== true && row.is_admin !== true) {
+        byId.set(row.id, {
+          id: row.id,
+          email: row.email || null,
+          full_name: row.full_name || null,
+          wallet_balance: Number(row.wallet_balance || 0),
+          is_staff: false,
+          is_admin: false,
+          created_at: row.created_at,
+        })
+      }
+    }
+  }
+  return json({ users: [...byId.values()]
+    .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+    .slice(0, 50) })
+}
+
+async function getCustomerProfileMap(admin: any, rows: any[]) {
+  const userIds = [...new Set(rows.map((row) => row?.user_id).filter(Boolean))]
+  const map = new Map<string, any>()
+  for (let i = 0; i < userIds.length; i += 500) {
+    const slice = userIds.slice(i, i + 500)
+    const { data, error } = await admin
+      .from('profiles')
+      .select('id, email, full_name, is_staff, is_admin')
+      .in('id', slice)
+    if (error) throw new Error(error.message)
+    for (const profile of data || []) {
+      if (!profile.is_staff && !profile.is_admin) map.set(profile.id, profile)
+    }
+  }
+  return map
+}
+
+function staffHistoryRow(source: string, row: any, profile: any, amount: number, title: string, subtitle?: string) {
+  return {
+    id: `${source.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${row.id}`,
+    source,
+    date: row.created_at,
+    user_id: row.user_id,
+    customer: profile?.full_name || profile?.email || row.user_id || 'Customer',
+    customer_email: profile?.email || '',
+    title,
+    subtitle: subtitle || '',
+    amount,
+    status: row.status,
+    reference: row.reference || row.id,
+  }
+}
+
+async function readPagedRows(admin: any, table: string, maxRows = 50000) {
+  const pageSize = 1000
+  const rows: any[] = []
+
+  for (let from = 0; from < maxRows; from += pageSize) {
+    const { data, error } = await admin
+      .from(table)
+      .select('*')
+      .order('created_at', { ascending: false })
+      .range(from, from + pageSize - 1)
+
+    if (error) throw new Error(`${table}: ${error.message}`)
+    rows.push(...(data || []))
+    if (!data || data.length < pageSize) break
+  }
+
+  return { rows, capped: rows.length >= maxRows, maxRows }
+}
+
+async function handleStaffDepositHistory(admin: any, user: any) {
+  await requireStaffReadPermission(admin, user, 'tab_transactions')
+  const { rows: data, capped, maxRows } = await readPagedRows(admin, 'transactions')
+
+  const rows = (data || []).filter((row) => isCompletedStatus(row.status) && isDepositTransaction(row))
+  const profiles = await getCustomerProfileMap(admin, rows)
+  const deposits = rows
+    .filter((row) => profiles.has(row.user_id))
+    .map((row) => staffHistoryRow(
+      'Deposits',
+      row,
+      profiles.get(row.user_id),
+      Number(row.amount || 0),
+      row.description || row.type || 'Wallet deposit',
+      row.balance_after == null ? '' : `Balance after NGN ${Number(row.balance_after || 0).toLocaleString()}`,
+    ))
+
+  return json({
+    success: true,
+    data: deposits,
+    warning: capped ? `Loaded the newest ${maxRows.toLocaleString()} transaction rows. Older records may require a narrower export.` : null,
+  })
+}
+
+async function handleStaffSalesHistory(admin: any, user: any) {
+  await requireStaffReadPermission(admin, user, 'tab_sales')
+  const cappedSources: string[] = []
+  let cappedMaxRows = 0
+
+  const read = async (table: string) => {
+    const { rows, capped, maxRows } = await readPagedRows(admin, table)
+    if (capped) {
+      cappedSources.push(table)
+      cappedMaxRows = Math.max(cappedMaxRows, maxRows)
+    }
+    return rows
+  }
+  const readSmmServices = async () => {
+    const { data, error } = await admin
+      .from('smm_services')
+      .select('id,name,platform')
+    if (error) {
+      console.warn('Failed to load SMM service names:', error.message)
+      return []
+    }
+    return data || []
+  }
+
+  const [orders, smsOrders, cryptoRows, cryptoWithdrawalRows, billsRows, giftRows, socialRows, smmServices] = await Promise.all([
+    read('orders'),
+    read('sms_orders'),
+    read('crypto_transactions'),
+    read('crypto_withdrawals'),
+    read('bills_transactions'),
+    read('bitrefill_orders'),
+    read('smm_orders'),
+    readSmmServices(),
+  ])
+
+  const allRows = [...orders, ...smsOrders, ...cryptoRows, ...cryptoWithdrawalRows, ...billsRows, ...giftRows, ...socialRows]
+  const profiles = await getCustomerProfileMap(admin, allRows)
+  const smmServiceById = new Map<string, any>((smmServices || []).map((service: any) => [String(service.id), service]))
+  const rows = [
+    ...orders.filter((row) => isCompletedStatus(row.status) && profiles.has(row.user_id)).map((row) => {
+      const details = row.account_details || {}
+      const quantity = Number(details.quantity || 1)
+      return staffHistoryRow('Products', row, profiles.get(row.user_id), Number(row.amount || 0), details.product_name || 'Product order', `${quantity} item${quantity === 1 ? '' : 's'}`)
+    }),
+    ...smsOrders.filter((row) => isCompletedStatus(row.status) && profiles.has(row.user_id)).map((row) =>
+      staffHistoryRow('SMS', row, profiles.get(row.user_id), Number(row.price_ngn || row.amount_ngn || row.total_cost || 0), row.service_name || 'SMS order', row.order_type || 'otp'),
+    ),
+    ...cryptoRows.filter((row) => isCompletedStatus(row.status) && profiles.has(row.user_id)).map((row) =>
+      staffHistoryRow('Crypto', row, profiles.get(row.user_id), Number(row.naira_amount || row.amount || 0), `${row.crypto_type || 'Crypto'} ${row.transaction_type || 'sale'}`, row.crypto_amount ? `${row.crypto_amount} ${row.crypto_type || ''}` : ''),
+    ),
+    ...cryptoWithdrawalRows.filter((row) => isCompletedStatus(row.status) && profiles.has(row.user_id)).map((row) =>
+      staffHistoryRow('Crypto', row, profiles.get(row.user_id), Number(row.amount || 0), `Withdrawal to ${row.bank_name || 'bank'}`),
+    ),
+    ...billsRows.filter((row) => isCompletedStatus(row.status) && profiles.has(row.user_id)).map((row) =>
+      staffHistoryRow('Bills', row, profiles.get(row.user_id), Number(row.amount || 0), row.transaction_type || 'Bill payment', row.service_provider || row.phone || ''),
+    ),
+    ...giftRows.filter((row) => isCompletedStatus(row.status) && profiles.has(row.user_id)).map((row) =>
+      staffHistoryRow('Gift Cards', row, profiles.get(row.user_id), Number(row.amount_ngn || row.amount || 0), row.product_name || row.product_id || 'Gift card', row.quantity ? `${row.quantity} item(s)` : ''),
+    ),
+    ...socialRows.filter((row) => isCompletedStatus(row.status) && profiles.has(row.user_id)).map((row) => {
+      const service = smmServiceById.get(String(row.service_id))
+      return staffHistoryRow('Social Boost', row, profiles.get(row.user_id), Number(row.amount_ngn || row.amount || 0), service?.name || row.service_name || 'Social boost order', [service?.platform, row.quantity ? `${row.quantity} units` : ''].filter(Boolean).join(' • '))
+    }),
+  ].sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime())
+
+  return json({
+    success: true,
+    data: rows,
+    warning: cappedSources.length > 0
+      ? `Loaded the newest ${cappedMaxRows.toLocaleString()} rows from ${cappedSources.join(', ')}. Older records may require a narrower export.`
+      : null,
+  })
+}
+
+async function readLimitedRows(admin: any, table: string, limit = 8) {
+  const { data, error } = await admin
+    .from(table)
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(limit)
+  if (error) {
+    console.error('Staff revenue snapshot failed:', error)
+    return { rows: [], error: 'Snapshot data unavailable' }
+  }
+  return { rows: data || [], error: '' }
+}
+
+async function handleStaffRevenueOsSnapshot(admin: any, user: any) {
+  await requireStaffReadPermission(admin, user, 'tab_revenue_os')
+
+  const settingKeys = [
+    'cro_global_enabled',
+    'cro_autonomy_level',
+    'cro_shadow_mode_enabled',
+    'cro_global_holdout_pct',
+    'cro_holdout_percentage',
+    'cro_experimentation_enabled',
+    'cro_promotion_max_discount_pct',
+    'cro_promotion_monthly_budget_ngn',
+    'cro_maintenance_enabled',
+    'cro_maintenance_freeze_reason',
+    'cro_maintenance_last_status',
+    'cro_maintenance_last_run_at',
+    'cro_maintenance_last_summary',
+  ]
+  const { data: settingsRows, error: settingsError } = await admin
+    .from('app_settings')
+    .select('key,value,updated_at')
+    .in('key', settingKeys)
+  if (settingsError) throw new Error(settingsError.message)
+
+  const [
+    quality,
+    opportunities,
+    actionPlans,
+    experiments,
+    decisions,
+  ] = await Promise.all([
+    readLimitedRows(admin, 'revenue_data_quality_checks', 8),
+    readLimitedRows(admin, 'cro_opportunities', 8),
+    readLimitedRows(admin, 'cro_action_plans', 8),
+    readLimitedRows(admin, 'cro_experiments', 6),
+    readLimitedRows(admin, 'cro_decision_audit', 8),
+  ])
+
+  const warnings = [quality, opportunities, actionPlans, experiments, decisions]
+    .filter((result) => result.error)
+    .map((result) => result.error)
+
+  return json({
+    success: true,
+    data: {
+      settings: Object.fromEntries((settingsRows || []).map((row: any) => [row.key, row.value])),
+      settings_updated_at: Object.fromEntries((settingsRows || []).map((row: any) => [row.key, row.updated_at])),
+      quality: quality.rows,
+      opportunities: opportunities.rows,
+      action_plans: actionPlans.rows,
+      experiments: experiments.rows,
+      decisions: decisions.rows,
+      warning: warnings.length ? `Some Revenue OS tables could not be read: ${warnings.join('; ')}` : '',
+    },
+  })
+}
+
+async function daisyCancelNumber(activationId: string) {
+  const apiKey = Deno.env.get('DAISYSMS_API_KEY') || ''
+  if (!apiKey || !activationId) throw new Error('SMS cancellation requires provider credentials and activation ID')
+  const url = new URL(Deno.env.get('DAISYSMS_BASE_URL') || DEFAULT_DAISY_BASE)
+  url.searchParams.set('api_key', apiKey)
+  url.searchParams.set('id', activationId)
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { controller.abort(); reject(new Error('SMS cancellation timed out; outcome needs review')) }, 12000)
+  })
+  async function request(action: string, status?: string) {
+    url.searchParams.set('action', action)
+    if (status) url.searchParams.set('status', status)
+    const res = await Promise.race([fetch(url.toString(), { signal: controller.signal, redirect: 'error', credentials: 'omit', cache: 'no-store' }), deadline])
+    if (!res.ok || res.redirected || !res.body) throw new Error('SMS provider request failed; outcome needs review')
+    const reader = res.body.getReader()
+    let body = '', size = 0
+    try {
+      while (true) {
+        const next = await Promise.race([reader.read(), deadline])
+        if (next.done) break
+        size += next.value.byteLength
+        if (size > 16384) throw new Error('SMS provider response is too large')
+        body += new TextDecoder().decode(next.value)
+      }
+    } finally { void reader.cancel().catch(() => undefined) }
+    return body.trim()
+  }
+  try {
+    const status = await request('getStatus')
+    if (status === 'STATUS_CANCEL') return 'STATUS_CANCEL'
+    if (status !== 'STATUS_WAIT_CODE' && status !== 'STATUS_WAITING') throw new Error('SMS provider outcome needs review; cancellation is not confirmed')
+    if (await request('setStatus', '8') !== 'ACCESS_CANCEL') throw new Error('DaisySMS did not confirm cancellation; manual outcome review required')
+    return 'ACCESS_CANCEL'
+  } finally { if (timer) clearTimeout(timer); controller.abort() }
+}
+
+async function updateProductGroupStock(admin: any, productGroupId: string) {
+  const { count, error } = await admin
+    .from('individual_accounts')
+    .select('*', { count: 'exact', head: true })
+    .eq('product_group_id', productGroupId)
+    .eq('status', 'available')
+
+  if (error) throw new Error(error.message)
+
+  // Statement triggers have already refreshed count and availability. A staff
+  // inventory update must not overwrite PAUSED or confer supplier readiness.
+  if (count == null) throw new Error('Inventory count unavailable')
+}
+
+function isLikelyCredentialEmail(value?: string | null) {
+  return /^[^\s@|:;]+@[^\s@|:;]+\.[^\s@|:;]+$/.test(String(value || '').trim())
+}
+
+function isLikelyCredentialExtra(value?: string | null) {
+  const raw = String(value || '').trim()
+  const lower = raw.toLowerCase()
+  if (!raw) return false
+  if (raw.length >= 180) return true
+  if (/(^|[;\s"'{}])(csrftoken|csrf_token|csrfmiddlewaretoken|sessionid|session_id|cookie|cookies|auth_token|access_token|refresh_token|bearer)(=|:|[;\s"'{}]|$)/i.test(raw)) return true
+  if (/(^|[;\s])(c_user|xs|datr|sb|fr|wd|presence|m_pixel_ratio|ig_did|mid|ds_user_id|rur|sessionid)\s*=/.test(lower)) return true
+  if ((raw.match(/[A-Za-z0-9_.-]{2,}\s*=/g) || []).length >= 2 && raw.includes(';')) return true
+  if ((raw.startsWith('{') || raw.startsWith('[')) && raw.length >= 80) return true
+  return false
+}
+
+function isLikelyCredentialTwoFa(value?: string | null) {
+  const compact = String(value || '').replace(/\s+/g, '')
+  return /^[A-Z2-7]{16,}$/i.test(compact) || /^\d{6,8}$/.test(compact)
+}
+
+function addCredentialExtra(row: Record<string, any>, key: string, value: string) {
+  if (!value) return
+  const current = row.additional_info && typeof row.additional_info === 'object' ? row.additional_info : {}
+  const extraFields = current.extra_fields && typeof current.extra_fields === 'object' ? current.extra_fields : {}
+  let nextKey = key || 'extra'
+  let suffix = 2
+  while (extraFields[nextKey] != null) {
+    nextKey = `${key}_${suffix}`
+    suffix += 1
+  }
+  row.additional_info = { ...current, extra_fields: { ...extraFields, [nextKey]: value } }
+}
+
+function normalizeStaffBulkRow(input: Record<string, any>) {
+  const row: Record<string, any> = { ...input }
+
+  for (const field of ['email', 'email_password', 'two_fa', 'two_fa_code', 'recovery_email', 'recovery_email_password']) {
+    const value = row[field] == null ? '' : String(row[field]).trim()
+    if (value && isLikelyCredentialExtra(value)) {
+      addCredentialExtra(row, `misplaced_${field}`, value)
+      row[field] = ''
+    }
+  }
+
+  if (row.email && !isLikelyCredentialEmail(row.email)) {
+    addCredentialExtra(row, 'misplaced_email', String(row.email).trim())
+    row.email = ''
+  }
+  if (!row.email && isLikelyCredentialEmail(row.email_password)) {
+    row.email = String(row.email_password).trim()
+    row.email_password = ''
+  }
+  if (row.recovery_email && !isLikelyCredentialEmail(row.recovery_email) && !row.email_password && row.email) {
+    row.email_password = String(row.recovery_email).trim()
+    row.recovery_email = ''
+  }
+  if (row.two_fa && !row.two_fa_code) {
+    row.two_fa_code = row.two_fa
+    row.two_fa = ''
+  }
+  if (row.two_fa_code && !isLikelyCredentialTwoFa(row.two_fa_code) && !row.email_password && row.email) {
+    row.email_password = String(row.two_fa_code).trim()
+    row.two_fa_code = ''
+  }
+
+  return row
+}
+
+async function applyAccountPendingAction(admin: any, pendingAction: any) {
+  const action = pendingAction.action_type
+  const d = pendingAction.action_data || {}
+  const now = new Date().toISOString()
+
+  if (action === 'add_single_account') {
+    const productGroupId = String(d.product_group_id || '').trim()
+    const username = String(d.username || '').trim()
+    const password = String(d.password || '').trim()
+    const email = typeof d.email === 'string' && d.email.trim() ? d.email.trim() : null
+
+    if (!productGroupId || !username || !password) throw new Error('Missing required account fields')
+
+    const { data, error } = await admin
+      .from('individual_accounts')
+      .insert([{
+        product_group_id: productGroupId,
+        username,
+        password,
+        email,
+        status: 'available',
+        created_at: now,
+      }])
+      .select()
+      .single()
+
+    if (error) throw new Error(error.message)
+    if (!data?.id) throw new Error('Failed to create account')
+
+    await updateProductGroupStock(admin, productGroupId)
+    return { accountsCreated: 1 }
+  }
+
+  if (action === 'bulk_upload_accounts') {
+    const productGroupId = String(d.product_group_id || '').trim()
+    const parsedRows = Array.isArray(d.parsed_rows) ? d.parsed_rows : []
+
+    if (!productGroupId) throw new Error('Missing product group for bulk upload')
+    if (!parsedRows.length) throw new Error('No valid CSV rows')
+
+    const hasAnyUsernameOrEmail = parsedRows.some((r: any) => (r.username && String(r.username).trim()) || (r.email && String(r.email).trim()))
+    const hasPasswordAtAnyRow = parsedRows.some((r: any) => r && String(r.password || '').trim())
+    if (!hasPasswordAtAnyRow) throw new Error('CSV must contain a password column/value')
+    if (!hasAnyUsernameOrEmail) throw new Error('CSV must contain email or username values')
+
+    const accounts = parsedRows
+      .map((row: any) => {
+        row = normalizeStaffBulkRow(row || {})
+        const password = row?.password ? String(row.password).trim() : ''
+        const username = row?.username ? String(row.username).trim() : (row?.email ? String(row.email).trim() : '')
+        const email = row?.email ? String(row.email).trim() : null
+        const emailPassword = row?.email_password ? String(row.email_password).trim() : null
+        const twoFaCode = row?.two_fa ? String(row.two_fa).trim() : row?.two_fa_code ? String(row.two_fa_code).trim() : null
+        const recoveryEmail = row?.recovery_email ? String(row.recovery_email).trim() : null
+        const recoveryEmailPassword = row?.recovery_email_password ? String(row.recovery_email_password).trim() : null
+
+        if (!password || !username) return null
+        return {
+          product_group_id: productGroupId,
+          username,
+          password,
+          email,
+          email_password: emailPassword,
+          two_fa_code: twoFaCode,
+          recovery_email: recoveryEmail,
+          recovery_email_password: recoveryEmailPassword,
+          additional_info: row?.additional_info || null,
+          status: 'available',
+          created_at: now,
+        }
+      })
+      .filter(Boolean) as Array<Record<string, unknown>>
+
+    if (!accounts.length) throw new Error('No valid accounts found in CSV')
+
+    const { error } = await admin.from('individual_accounts').insert(accounts)
+    if (error) throw new Error(error.message)
+
+    await updateProductGroupStock(admin, productGroupId)
+    return { accountsCreated: accounts.length }
+  }
+
+  throw new Error('Unsupported account action type')
+}
+
+async function refundSmsOrderWallet(admin: any, order: any, reason: string, metadata: Record<string, unknown> = {}, providerResponse?: string) {
+  const amount = Number(order?.price_ngn || 0)
+  if (!order?.id || !order?.user_id || !Number.isFinite(amount) || amount <= 0) throw new Error('SMS charge needs review before refund')
+
+  if (!order.provider_request_id || !['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(providerResponse || '')) throw new Error('Provider cancellation proof required before SMS refund')
+  const evidence = { provider: 'daisysms', activation_id: String(order.provider_request_id), response: providerResponse, provider_response: providerResponse, observed_at: new Date().toISOString(), ...metadata }
+  const { error: evidenceError } = await admin.from('sms_orders').update({
+    last_provider_response: { ...(order.last_provider_response || {}), sms_cancellation: evidence },
+  }).eq('id', order.id).eq('provider_request_id', order.provider_request_id)
+  if (evidenceError) throw new Error('Could not save provider cancellation proof; refund needs review')
+  const { data: result, error } = await admin.rpc('cancel_sms_order_and_refund', {
+    p_order_id: order.id, p_reason: metadata.pending_action_type === 'sms_auto_cancel_stale' ? 'staff_auto_cancel_stale' : 'staff_cancelled', p_evidence: evidence,
+    p_actor_user_id: metadata.approved_by || null, p_owner_undelivered_override: false,
+  })
+  if (error || !result?.success) throw new Error('SMS refund needs review; the original charge was not credited twice')
+  const { data: currentOrder, error: readError } = await admin.from('sms_orders').select('refunded_at,refund_reference').eq('id', order.id).single()
+  if (readError || !currentOrder?.refunded_at) throw new Error('SMS refund result needs review')
+  await recordSmsRefundRevenueEvents(admin, order, amount, currentOrder.refund_reference, reason, result.idempotent_replay === true)
+  return { refunded: true, amount, reference: currentOrder.refund_reference, alreadyRefunded: result.idempotent_replay === true }
+}
+
+async function applySmsPendingAction(admin: any, pendingAction: any) {
+  const d = pendingAction.action_data || {}
+  const now = new Date().toISOString()
+  const approvingAdminId = pendingAction.reviewed_by || pendingAction.admin_id || null
+  const approvalMetadata = {
+    approved_by: approvingAdminId,
+    approval_mode: approvingAdminId ? 'owner_review' : 'enabled_staff_auto_approval',
+    staff_id: pendingAction.staff_id || null,
+    staff_email: pendingAction.staff_email || null,
+    pending_action_id: pendingAction.id || null,
+    pending_action_type: pendingAction.action_type || null,
+  }
+
+  if (pendingAction.action_type === 'sms_update_product') {
+    const serviceCode = String(d.service_code || '').trim()
+    if (!serviceCode) throw new Error('SMS service_code missing')
+    const updates: Record<string, unknown> = { service_code: serviceCode, updated_at: now }
+    if (typeof d.service_name === 'string') updates.service_name = d.service_name.trim()
+    if (typeof d.is_enabled === 'boolean') updates.is_enabled = d.is_enabled
+    if (typeof d.is_favorite === 'boolean') updates.is_favorite = d.is_favorite
+    if (typeof d.auto_markup_enabled === 'boolean') updates.auto_markup_enabled = d.auto_markup_enabled
+    if (Object.prototype.hasOwnProperty.call(d, 'price_override_ngn')) updates.price_override_ngn = optionalNaira(d.price_override_ngn)
+    if (Object.prototype.hasOwnProperty.call(d, 'margin_ngn')) updates.margin_ngn = optionalNaira(d.margin_ngn)
+
+    const { error } = await admin.from('sms_product_settings').upsert(updates, { onConflict: 'service_code' })
+    if (error) throw new Error(error.message)
+    return
+  }
+
+  if (pendingAction.action_type === 'sms_bulk_products') {
+    if (typeof d.is_enabled !== 'boolean') throw new Error('SMS is_enabled missing')
+    const { data: rows, error: loadError } = await admin.from('sms_product_settings').select('service_code, service_name')
+    if (loadError) throw new Error(loadError.message)
+    const updates = (rows || []).map((row: any) => ({
+      service_code: row.service_code,
+      service_name: row.service_name,
+      is_enabled: d.is_enabled,
+      updated_at: now,
+    }))
+    if (updates.length > 0) {
+      const { error } = await admin.from('sms_product_settings').upsert(updates, { onConflict: 'service_code' })
+      if (error) throw new Error(error.message)
+    }
+    return
+  }
+
+  if (pendingAction.action_type === 'sms_apply_markup') {
+    const marginNgn = optionalNaira(d.margin_ngn)
+    if (marginNgn === null) throw new Error('SMS markup missing')
+    const keepAutoApplying = d.keep_auto_applying !== false
+
+    const { error: settingError } = await admin
+      .from('app_settings')
+      .upsert({ key: 'sms_default_margin_ngn', value: String(marginNgn), updated_at: now }, { onConflict: 'key' })
+    if (settingError) throw new Error(settingError.message)
+
+    const { error } = await admin
+      .from('sms_product_settings')
+      .update({ margin_ngn: marginNgn, auto_markup_enabled: keepAutoApplying, updated_at: now })
+      .neq('service_code', '')
+    if (error) throw new Error(error.message)
+    return
+  }
+
+  if (pendingAction.action_type === 'sms_set_rounding') {
+    if (typeof d.round_to_nearest_10 !== 'boolean') throw new Error('SMS rounding value missing')
+    const { error } = await admin
+      .from('app_settings')
+      .upsert({
+        key: 'sms_round_markup_to_nearest_10',
+        value: d.round_to_nearest_10 ? 'true' : 'false',
+        updated_at: now,
+      }, { onConflict: 'key' })
+    if (error) throw new Error(error.message)
+    return
+  }
+
+  if (pendingAction.action_type === 'sms_cancel_order') {
+    const orderId = String(d.order_id || '').trim()
+    if (!orderId) throw new Error('SMS order_id missing')
+
+    const { data: order, error } = await admin.from('sms_orders').select('*').eq('id', orderId).single()
+    if (error || !order) throw new Error(error?.message || 'SMS order not found')
+
+    if (order.refunded_at) return
+    if (String(order.status || '').toLowerCase() === 'completed') {
+      throw new Error('Terminal SMS order requires manual refund review')
+    }
+    if (Array.isArray(order.messages) && order.messages.length > 0) {
+      throw new Error('SMS code already received; cancellation requires review')
+    }
+    const savedProof = order.last_provider_response?.sms_cancellation
+    const confirmedResponse = savedProof?.activation_id === String(order.provider_request_id) &&
+      ['ACCESS_CANCEL', 'STATUS_CANCEL'].includes(savedProof?.response) ? savedProof.response : await daisyCancelNumber(String(order.provider_request_id || ''))
+
+    await refundSmsOrderWallet(
+      admin,
+      order,
+      `Staff refund for cancelled SMS order: ${order.reference || order.id}`,
+      approvalMetadata,
+      confirmedResponse,
+    )
+    return
+  }
+
+  if (pendingAction.action_type === 'sms_auto_cancel_stale') {
+    const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+    const { data: staleOrders, error } = await admin
+      .from('sms_orders')
+      .select('*')
+      .not('status', 'in', `(${SMS_TERMINAL_STATUSES.map((status) => `"${status}"`).join(',')})`)
+      .lt('created_at', cutoff)
+    if (error) throw new Error(error.message)
+
+    let cancelled = 0
+    let reviewCount = 0
+    let failedCount = 0
+    for (const order of (staleOrders || []).slice(0, 50)) {
+      if (order.messages && Array.isArray(order.messages) && order.messages.length > 0) continue
+      if (!order.provider_request_id) { reviewCount++; continue }
+      try {
+        const confirmedResponse = await daisyCancelNumber(String(order.provider_request_id))
+        await refundSmsOrderWallet(
+          admin,
+          order,
+          `Staff refund for stale SMS order: ${order.reference || order.id}`,
+          approvalMetadata,
+          confirmedResponse,
+        )
+        cancelled += 1
+      } catch { failedCount++ }
+    }
+    return { cancelled_count: cancelled, review_count: reviewCount, failed_count: failedCount, remaining_count: Math.max(0, (staleOrders || []).length - 50) }
+  }
+
+  throw new Error('Unsupported SMS action type')
+}
+
+const STAFF_ACTIONS_BY_PERMISSION: Record<string, string[]> = {
+  tab_add_product: ['add_single_account'],
+  tab_bulk_upload: ['bulk_upload_accounts'],
+  tab_products: ['create_product_group', 'update_product_group'],
+  tab_discount_codes: ['create_discount_code', 'toggle_discount_code'],
+  tab_sms_products: ['sms_update_product', 'sms_bulk_products', 'sms_apply_markup', 'sms_set_rounding'],
+  tab_sms_orders: ['sms_cancel_order', 'sms_auto_cancel_stale'],
+  tab_revenue_os: ['cro_update_controls'],
+  tab_categories: ['create_category'],
+  tab_email: ['send_email_list', 'broadcast_email'],
+  tab_templates: ['update_product_group'],
+  setting_rate: ['upsert_setting'],
+  setting_referral_pct: ['upsert_setting'],
+  setting_ercas: ['upsert_setting'],
+  setting_support_links: ['upsert_settings'],
+  action_adjust_balance: ['adjust_balance'],
+}
+
+const STAFF_PERMISSION_KEYS = new Set([
+  ...Object.keys(STAFF_ACTIONS_BY_PERMISSION),
+  'view_stats', 'tab_transactions', 'tab_sales', 'tab_users', 'view_pocketfi_payments',
+])
+
+const STAFF_SETTING_KEYS_BY_PERMISSION: Record<string, string[]> = {
+  setting_rate: ['ngn_usd_rate'],
+  setting_referral_pct: ['referral_commission_pct'],
+  setting_ercas: ['ercas_enabled'],
+  setting_support_links: [
+    'support_whatsapp_url',
+    'support_telegram_url',
+    'support_channel_url',
+    'support_popup_message',
+  ],
+}
+
+function staffCatalogFields(raw: unknown, creating: boolean): Record<string, unknown> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid product details')
+  const input = raw as Record<string, unknown>
+  const keys = creating ? ['category_id', 'name', 'description', 'price'] : [
+    'category_id', 'name', 'description', 'price', 'muabanvia_product_id',
+    'shopclone_product_id', 'shopviaclone_product_id', 'auto_fulfill_enabled',
+  ]
+  if (Object.keys(input).some(key => !keys.includes(key))) throw new Error('Unpermitted product field')
+  const result: Record<string, unknown> = {}
+  const has = (key: string) => Object.prototype.hasOwnProperty.call(input, key)
+  if (creating || has('category_id')) {
+    if (typeof input.category_id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(input.category_id)) throw new Error('Select a valid category')
+    result.category_id = input.category_id
+  }
+  if (creating || has('name')) {
+    if (typeof input.name !== 'string' || !input.name.trim() || input.name.trim().length > 300) throw new Error('Product name must contain 1–300 characters')
+    result.name = input.name.trim()
+  }
+  if (has('description')) {
+    if (input.description !== null && (typeof input.description !== 'string' || input.description.length > 20000)) throw new Error('Product description is too long or invalid')
+    result.description = typeof input.description === 'string' ? input.description.trim() : null
+  }
+  if (creating || has('price')) {
+    const value = input.price
+    if ((typeof value !== 'string' && typeof value !== 'number') || (typeof value === 'string' && !/^\d+(?:\.\d{1,2})?$/.test(value.trim()))) throw new Error('Product price must be a positive amount with at most two decimals')
+    const price = Number(value)
+    if (!Number.isFinite(price) || price <= 0 || price > 99999999.99 || Math.abs(price * 100 - Math.round(price * 100)) > 0.00001) throw new Error('Product price is outside the supported range')
+    result.price = price
+  }
+  for (const key of ['muabanvia_product_id', 'shopclone_product_id', 'shopviaclone_product_id']) {
+    if (has(key)) {
+      const value = input[key]
+      if (value !== null && (typeof value !== 'string' || value.length > 300)) throw new Error('Invalid supplier product id')
+      result[key] = typeof value === 'string' && value.trim() ? value.trim() : null
+    }
+  }
+  if (has('auto_fulfill_enabled')) {
+    if (typeof input.auto_fulfill_enabled !== 'boolean') throw new Error('Invalid automatic fulfilment setting')
+    result.auto_fulfill_enabled = input.auto_fulfill_enabled
+  }
+  if (!Object.keys(result).length) throw new Error('No permitted product updates provided')
+  return result
+}
+
+async function requireStaffCatalogCategory(admin: any, fields: Record<string, unknown>) {
+  if (!Object.prototype.hasOwnProperty.call(fields, 'category_id')) return
+  const { data, error } = await admin.from('categories').select('id, is_active').eq('id', fields.category_id).maybeSingle()
+  if (error || !data || data.is_active !== true) throw new Error('Selected category is unavailable')
+}
+
+function requireAllowedStaffAction(pendingAction: any) {
+  const permissionKey = String(pendingAction.permission_key || '').trim()
+  const action = String(pendingAction.action_type || '').trim()
+  const d = pendingAction.action_data || {}
+  const allowedActions = STAFF_ACTIONS_BY_PERMISSION[permissionKey] || []
+
+  if (!permissionKey || !action || !allowedActions.includes(action)) {
+    throw new Error('Action is not allowed for this staff permission')
+  }
+
+  if (action === 'create_product_group') staffCatalogFields(d, true)
+  if (action === 'update_product_group') staffCatalogFields(d.updates, false)
+
+  if (action === 'adjust_balance' && Number(d.amount) > 0) {
+    throw new Error('Wallet credits require a verified Ercas or PocketFi payment')
+  }
+
+  if (action === 'upsert_setting') {
+    const key = String(d.setting_key || '').trim()
+    const allowedKeys = STAFF_SETTING_KEYS_BY_PERMISSION[permissionKey] || []
+    if (!allowedKeys.includes(key)) throw new Error('Setting is not allowed for this staff permission')
+  }
+
+  if (action === 'upsert_settings') {
+    const settings = d.settings && typeof d.settings === 'object' ? d.settings : {}
+    const allowedKeys = STAFF_SETTING_KEYS_BY_PERMISSION[permissionKey] || []
+    const keys = Object.keys(settings)
+    if (!keys.length) throw new Error('No settings provided')
+    const blocked = keys.filter((key) => !allowedKeys.includes(key))
+    if (blocked.length) throw new Error('One or more settings are not allowed for this staff permission')
+  }
+}
+
+function sanitizeAllowedStaffSettingValue(permissionKey: string, key: string, rawValue: unknown) {
+  const value = String(rawValue ?? '').trim()
+
+  if (permissionKey === 'setting_rate' && key === 'ngn_usd_rate') {
+    const rate = Number(value)
+    if (!Number.isFinite(rate) || rate <= 0 || rate > 100000) {
+      throw new Error('NGN/USD rate must be a positive number')
+    }
+    return String(rate)
+  }
+
+  if (permissionKey === 'setting_referral_pct' && key === 'referral_commission_pct') {
+    throw new Error('Referral commissions have been retired. Tally Circle uses purchase discounts.')
+  }
+
+  if (permissionKey === 'setting_ercas' && key === 'ercas_enabled') {
+    return value === 'true' ? 'true' : 'false'
+  }
+
+  if (permissionKey === 'setting_support_links') {
+    if (key === 'support_popup_message') return value.slice(0, 500)
+    if (value && !/^https?:\/\//i.test(value)) {
+      throw new Error('Support links must start with http:// or https://')
+    }
+    return value.slice(0, 500)
+  }
+
+  return value
+}
+
+async function applyStaffAction(admin: any, pendingAction: any) {
+  requireAllowedStaffAction(pendingAction)
+  const permissionKey = String(pendingAction.permission_key || '').trim()
+  const action = String(pendingAction.action_type || '')
+  const d = pendingAction.action_data || {}
+  const now = new Date().toISOString()
+
+  if (action === 'upsert_setting') {
+    const key = String(d.setting_key || '').trim()
+    if (!key) throw new Error('setting_key required')
+    const value = sanitizeAllowedStaffSettingValue(permissionKey, key, d.value)
+    const { error } = await admin
+      .from('app_settings')
+      .upsert({ key, value, updated_at: now }, { onConflict: 'key' })
+    if (error) throw new Error(error.message)
+    return {}
+  }
+
+  if (action === 'upsert_settings') {
+    const settings = d.settings || {}
+    const rows = Object.entries(settings).map(([key, value]) => ({
+      key,
+      value: sanitizeAllowedStaffSettingValue(permissionKey, key, value),
+      updated_at: now,
+    }))
+    if (!rows.length) throw new Error('No settings provided')
+    const { error } = await admin.from('app_settings').upsert(rows, { onConflict: 'key' })
+    if (error) throw new Error(error.message)
+    return {}
+  }
+
+  if (action === 'cro_update_controls') {
+    const settings = d.settings && typeof d.settings === 'object' ? d.settings : {}
+    const allowedKeys = new Set([
+      'cro_global_enabled',
+      'cro_autonomy_level',
+      'cro_shadow_mode_enabled',
+      'cro_global_holdout_pct',
+      'cro_holdout_percentage',
+      'cro_experimentation_enabled',
+      'cro_promotion_max_discount_pct',
+      'cro_promotion_monthly_budget_ngn',
+      'cro_maintenance_enabled',
+    ])
+    const rowsByKey = new Map<string, { key: string; value: string; updated_at: string }>()
+    Object.entries(settings)
+      .filter(([key]) => allowedKeys.has(key))
+      .forEach(([rawKey, rawValue]) => {
+        const key = rawKey === 'cro_holdout_percentage' ? 'cro_global_holdout_pct' : rawKey
+        let value = String(rawValue ?? '').trim()
+        if (['cro_global_enabled', 'cro_shadow_mode_enabled', 'cro_maintenance_enabled', 'cro_experimentation_enabled'].includes(key)) {
+          value = value === 'true' ? 'true' : 'false'
+        }
+        if (key === 'cro_autonomy_level') {
+          const level = Math.max(0, Math.min(8, Math.round(Number(value))))
+          if (!Number.isFinite(level)) throw new Error('Autonomy level must be between 0 and 8')
+          value = String(level)
+        }
+        if (key === 'cro_global_holdout_pct') {
+          const holdout = Math.max(0, Math.min(50, Number(value)))
+          if (!Number.isFinite(holdout)) throw new Error('Holdout percentage must be between 0 and 50')
+          value = String(holdout)
+        }
+        if (key === 'cro_promotion_max_discount_pct') {
+          const maxDiscount = Math.max(0, Math.min(90, Number(value)))
+          if (!Number.isFinite(maxDiscount)) throw new Error('Promotion max discount must be between 0 and 90')
+          value = String(maxDiscount)
+        }
+        if (key === 'cro_promotion_monthly_budget_ngn') {
+          const budget = Math.max(0, Math.round(Number(value)))
+          if (!Number.isFinite(budget)) throw new Error('Promotion monthly budget must be 0 or higher')
+          value = String(budget)
+        }
+        rowsByKey.set(key, { key, value, updated_at: now })
+      })
+    const rows = Array.from(rowsByKey.values())
+
+    if (!rows.length) throw new Error('No permitted Revenue OS control changes provided')
+    if (rows.some((row) => row.key === 'cro_global_enabled' && row.value === 'true')) {
+      const { data: freezeSetting } = await admin
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'cro_maintenance_freeze_reason')
+        .maybeSingle()
+      const freezeReason = String(freezeSetting?.value || '').trim()
+      if (freezeReason) {
+        throw new Error(`Revenue OS is frozen by guardrail: ${freezeReason}`)
+      }
+    }
+    const { error } = await admin.from('app_settings').upsert(rows, { onConflict: 'key' })
+    if (error) throw new Error(error.message)
+    return { updated: rows.length }
+  }
+
+  if (action === 'send_email_list') {
+    const subject = String(d.subject || '').trim()
+    const message = String(d.message || '').trim()
+    const recipients = Array.isArray(d.recipients)
+      ? Array.from(new Set<string>(d.recipients.map(normalizeEmail).filter(Boolean)))
+      : []
+    if (!subject || !message || recipients.length === 0) throw new Error('Subject, message, and recipients are required')
+
+    const html = buildEmailHtml(message)
+    let sent = 0
+    const failedEmails: string[] = []
+    for (const to of recipients) {
+      const result = await sendEmail({ to, subject, html })
+      if (result.success) sent += 1
+      else failedEmails.push(to)
+    }
+    if (sent === 0) throw new Error('No emails were sent')
+    return { sent, failed: failedEmails.length, failedEmails }
+  }
+
+  if (action === 'broadcast_email') {
+    const subject = String(d.subject || '').trim()
+    const message = String(d.message || '').trim()
+    if (!subject || !message) throw new Error('Subject and message are required')
+
+    const totalRecipients = await countPromotionConsentedCustomers(admin)
+    if (totalRecipients <= 0) throw new Error('No customers have opted in to promotional email broadcasts.')
+
+    const { data: job, error } = await admin
+      .from('broadcast_jobs')
+      .insert({
+        subject,
+        html_body: buildEmailHtml(message),
+        status: 'queued',
+        total_recipients: totalRecipients,
+        created_by: pendingAction.staff_id || null,
+      })
+      .select('id')
+      .single()
+    if (error) throw new Error(error.message)
+    return { job_id: job?.id, total_recipients: totalRecipients, audience: 'promotion_opted_in_customers' }
+  }
+
+  if (['add_single_account', 'bulk_upload_accounts'].includes(action)) {
+    return await applyAccountPendingAction(admin, pendingAction)
+  }
+
+  if (action.startsWith('sms_')) {
+    return await applySmsPendingAction(admin, pendingAction) || {}
+  }
+
+  if (action === 'create_category') {
+    const name = String(d.name || '').trim()
+    if (!name) throw new Error('Category name required')
+    const { error } = await admin.from('categories').insert({
+      name,
+      description: typeof d.description === 'string' && d.description.trim() ? d.description.trim() : null,
+      is_active: true,
+    })
+    if (error) throw new Error(error.message)
+    return {}
+  }
+
+  if (action === 'create_discount_code') {
+    const code = String(d.code || '').trim().toUpperCase()
+    const percentOff = Number(d.percent_off)
+    const maxUses = d.max_uses ? Number(d.max_uses) : null
+    const expiresAt = d.expires_at || null
+    if (!code) throw new Error('Discount code required')
+    if (!Number.isFinite(percentOff) || percentOff <= 0 || percentOff > 100) throw new Error('Discount percentage must be between 1 and 100')
+    const { data: maxDiscountSetting } = await admin
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'cro_promotion_max_discount_pct')
+      .maybeSingle()
+    const maxDiscount = Math.max(0, Math.min(90, Number(maxDiscountSetting?.value ?? 20)))
+    if (percentOff > maxDiscount) {
+      throw new Error(`Discount exceeds Revenue OS guardrail max of ${maxDiscount}%.`)
+    }
+    if (!d.category_id && !d.product_group_id && !d.user_id && !maxUses) {
+      throw new Error('Store-wide discount codes must have a usage limit.')
+    }
+    if (expiresAt && new Date(expiresAt).getTime() < Date.now()) {
+      throw new Error('Discount expiry cannot be in the past.')
+    }
+    if (d.product_group_id) {
+      const { data: product, error: productError } = await admin
+        .from('product_groups')
+        .select('id,is_active,price,stock_count,auto_fulfill_enabled,muabanvia_product_id,shopclone_product_id,shopviaclone_product_id')
+        .eq('id', d.product_group_id)
+        .maybeSingle()
+      if (productError) throw new Error(productError.message)
+      const active = product?.is_active !== false
+      const validPrice = Number(product?.price || 0) > 0
+      const available = Number(product?.stock_count || 0) > 0 || Boolean(
+        product?.auto_fulfill_enabled &&
+        (product?.muabanvia_product_id ||
+          product?.shopclone_product_id ||
+          product?.shopviaclone_product_id),
+      )
+      if (!product || !active || !validPrice || !available) {
+        throw new Error('Discount product scope must point to a currently sellable product.')
+      }
+    }
+    const { error } = await admin.from('discount_codes').insert({
+      code,
+      percent_off: Math.round(percentOff),
+      category_id: d.category_id || null,
+      product_group_id: d.product_group_id || null,
+      max_uses: maxUses,
+      expires_at: expiresAt,
+    })
+    if (error) throw new Error(error.message)
+    return {}
+  }
+
+  if (action === 'toggle_discount_code') {
+    const id = String(d.id || '').trim()
+    if (!id || typeof d.is_active !== 'boolean') throw new Error('Discount id and status required')
+    const { error } = await admin.from('discount_codes').update({ is_active: d.is_active }).eq('id', id)
+    if (error) throw new Error(error.message)
+    return {}
+  }
+
+  if (action === 'create_product_group') {
+    const fields = staffCatalogFields(d, true)
+    await requireStaffCatalogCategory(admin, fields)
+    // The approved audit id also prevents replay from creating another product.
+    if (!pendingAction.id) throw new Error('Approved product action id required')
+    const { data, error } = await admin.from('product_groups')
+      .insert({ ...fields, id: pendingAction.id, auto_fulfill_enabled: false })
+      .select('id').single()
+    if (error || !data) throw new Error(error?.message || 'Could not create product')
+    // Inventory triggers derive availability from real account rows; no invented stock.
+    return { product_group_id: data.id }
+  }
+
+  if (action === 'update_product_group') {
+    const id = String(d.id || '').trim()
+    if (!id) throw new Error('Product id required')
+    const allowed = staffCatalogFields(d.updates, false)
+    await requireStaffCatalogCategory(admin, allowed)
+    const { data, error } = await admin.from('product_groups').update(allowed).eq('id', id).select('id').maybeSingle()
+    if (error || !data) throw new Error(error?.message || 'Product not found')
+    return {}
+  }
+
+  if (action === 'adjust_balance') {
+    const userId = String(d.user_id || '').trim()
+    const amount = Number(d.amount)
+    const reason = String(d.reason || '').trim()
+    if (!userId || !Number.isFinite(amount) || amount === 0) throw new Error('Valid user and amount required')
+    if (amount > 0) throw new Error('Wallet credits require a verified Ercas or PocketFi payment')
+    if (reason.length < 3) throw new Error('A reason with at least 3 characters is required')
+    const { data: profile, error: loadError } = await admin
+      .from('profiles')
+      .select('wallet_balance,is_staff,is_admin')
+      .eq('id', userId)
+      .single()
+    if (loadError || !profile) throw new Error(loadError?.message || 'User not found')
+    if (profile.is_staff || profile.is_admin) throw new Error('Balance adjustments are only allowed for customer accounts')
+    const currentBalance = Number(profile.wallet_balance) || 0
+    const newBal = currentBalance + amount
+    if (newBal < 0) throw new Error('Balance cannot go below zero')
+    const transactionType = amount > 0 ? 'admin_credit' : 'admin_debit'
+    const reference = `STAFF-ADJ-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+    const approvingAdminId = pendingAction.reviewed_by || pendingAction.admin_id || null
+    if (amount > 0 && !approvingAdminId) {
+      throw new Error('Admin approval is required before staff balance credits can become spendable')
+    }
+    const result = await applyWalletTransaction(admin, {
+      userId,
+      type: transactionType,
+      amount: Math.abs(amount),
+      reference,
+      description: `Admin-approved staff adjustment by ${pendingAction.staff_email || pendingAction.staff_id}: ${reason}`,
+      idempotencyKey: `staff-adjust:${pendingAction.id || reference}`,
+      createdBy: approvingAdminId || pendingAction.staff_id || undefined,
+      metadata: {
+        source: 'manage-staff',
+        staff_id: pendingAction.staff_id || null,
+        staff_email: pendingAction.staff_email || null,
+        approved_by: approvingAdminId,
+        approval_type: 'staff_action_review',
+        approval_reference: pendingAction.id || reference,
+        reason,
+        requested_adjustment_amount: amount,
+      },
+    })
+    return { balance_after: Number(result.balance_after ?? newBal) }
+  }
+
+  throw new Error('Unsupported action type')
+}
+
+async function assertQueuedStaffPermission(admin: any, pendingAction: any) {
+  requireAllowedStaffAction(pendingAction)
+  const { data: profile, error: profileError } = await admin
+    .from('profiles')
+    .select('is_staff, is_admin, account_suspended')
+    .eq('id', pendingAction.staff_id)
+    .maybeSingle()
+  if (profileError || !profile || profile.is_staff !== true || profile.is_admin === true || profile.account_suspended === true) {
+    throw new Error('Queued action requester is not a current staff member')
+  }
+  const { data: permission, error: permissionError } = await admin
+    .from('staff_permissions')
+    .select('is_enabled')
+    .eq('user_id', pendingAction.staff_id)
+    .eq('permission_key', pendingAction.permission_key)
+    .maybeSingle()
+  if (permissionError || permission?.is_enabled !== true) {
+    throw new Error('Queued action permission is no longer enabled')
+  }
+}
+
+async function submitStaffAction(admin: any, user: any, body: Record<string, any>) {
+  const permissionKey = String(body.permission_key || '').trim()
+  const actionType = String(body.action_type || '').trim()
+  const actionLabel = String(body.action_label || actionType).trim()
+  const actionData = body.action_data && typeof body.action_data === 'object' ? body.action_data : {}
+
+  if (!permissionKey || !actionType) return json({ error: 'permission_key and action_type required' }, 400)
+  requireAllowedStaffAction({
+    permission_key: permissionKey,
+    action_type: actionType,
+    action_data: actionData,
+  })
+
+  const { data: profile, error: profileError } = await admin
+    .from('profiles')
+    .select('id, email, is_admin, is_staff, account_suspended')
+    .eq('id', user.id)
+    .single()
+  if (profileError || !profile) return json({ error: 'Profile not found' }, 403)
+  if (profile.account_suspended === true) return json({ error: 'Account suspended' }, 403)
+
+  const isAdmin = profile.is_admin === true
+  if (!isAdmin && profile.is_staff !== true) return json({ error: 'Forbidden — staff only' }, 403)
+
+  let autoApprove = isAdmin
+  if (!isAdmin) {
+    const { data: permission, error: permissionError } = await admin
+      .from('staff_permissions')
+      .select('is_enabled, auto_approve')
+      .eq('user_id', user.id)
+      .eq('permission_key', permissionKey)
+      .maybeSingle()
+    if (permissionError) return json({ error: 'Could not check staff permission' }, 500)
+    if (!permission?.is_enabled) return json({ error: 'Permission is not enabled' }, 403)
+    autoApprove = permission.auto_approve === true && permissionKey !== 'action_adjust_balance'
+  }
+
+  const pendingRow = {
+    staff_id: user.id,
+    staff_email: user.email,
+    permission_key: permissionKey,
+    action_type: actionType,
+    action_label: actionLabel,
+    action_data: actionData,
+  }
+
+  if (!autoApprove) {
+    const { error } = await admin.from('staff_pending_actions').insert(pendingRow)
+    if (error) return json({ error: 'Could not queue staff action' }, 500)
+    return json({ success: true, queued: true, applied: false })
+  }
+
+  const approvedPendingRow = {
+    ...pendingRow,
+    status: 'approved',
+    reviewed_at: new Date().toISOString(),
+    reviewed_by: isAdmin ? user.id : null,
+  }
+  const { data: auditRow, error: auditError } = await admin
+    .from('staff_pending_actions')
+    .insert(approvedPendingRow)
+    .select('id')
+    .single()
+  if (auditError || !auditRow?.id) return json({ error: 'Could not record approved action' }, 503)
+
+  try {
+    if (!isAdmin) await assertQueuedStaffPermission(admin, approvedPendingRow)
+    const result = await applyStaffAction(admin, { ...approvedPendingRow, id: auditRow.id })
+    return json({ success: true, queued: false, applied: true, ...result })
+  } catch (error) {
+    const { error: markFailedError } = await admin.from('staff_pending_actions')
+      .update({ status: 'failed' })
+      .eq('id', auditRow.id)
+    if (markFailedError) console.error('Could not mark failed staff action')
+    throw error
+  }
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
+
+  try {
+    const authHeader = req.headers.get('Authorization')
+    if (!authHeader) return json({ error: 'Unauthorized' }, 401)
+
+    const supabaseUser = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } }, auth: { persistSession: false } }
+    )
+    const { data: { user }, error: userError } = await supabaseUser.auth.getUser(authHeader.replace('Bearer ', ''))
+    if (userError || !user) return json({ error: 'Unauthorized' }, 401)
+
+    const admin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      { auth: { persistSession: false } }
+    )
+
+    const body = await req.json().catch(() => ({})) as Record<string, any>
+    const { action } = body
+
+    if (action === 'supplier_balance_alerts') {
+      const { data: warningProfile, error: warningProfileError } = await admin
+        .from('profiles').select('is_admin, is_staff, account_suspended').eq('id', user.id).single()
+      if (warningProfileError || !warningProfile || warningProfile.account_suspended === true ||
+        (warningProfile.is_admin !== true && warningProfile.is_staff !== true)) {
+        return json({ error: 'Staff access required' }, 403)
+      }
+      const { data: alerts, error: alertsError } = await admin.from('supplier_balance_alerts')
+        .select('provider, alert_code, last_seen_at').is('resolved_at', null).order('provider').limit(4)
+      if (alertsError) return json({ error: 'Supplier warning status is unavailable' }, 503)
+      return json({ alerts: alerts || [] })
+    }
+
+    if (action === 'submit_staff_action') {
+      return await submitStaffAction(admin, user, body)
+    }
+
+    if (action === 'staff_deposit_history') {
+      return await handleStaffDepositHistory(admin, user)
+    }
+
+    if (action === 'staff_sales_history') {
+      return await handleStaffSalesHistory(admin, user)
+    }
+
+    if (action === 'staff_revenue_os_snapshot') {
+      return await handleStaffRevenueOsSnapshot(admin, user)
+    }
+
+    if (action === 'staff_customer_search') {
+      return await handleStaffCustomerSearch(admin, user, body)
+    }
+
+    // Remaining staff-management operations require the current admin role.
+    const { data: ownerProfile, error: ownerProfileError } = await admin
+      .from('profiles')
+      .select('is_admin, account_suspended')
+      .eq('id', user.id)
+      .single()
+    const ownerUserId = Deno.env.get('TALLYSTORE_OWNER_USER_ID')?.trim()
+    if (!ownerUserId || ownerProfileError || ownerProfile?.is_admin !== true || ownerProfile?.account_suspended === true || user.id !== ownerUserId) {
+      return json({ error: 'Forbidden — admin only' }, 403)
+    }
+
+    // ── List all staff users ─────────────────────────────────────────────
+    if (action === 'list_staff') {
+      const { data, error } = await admin
+        .from('profiles')
+        .select('id, email, is_staff, wallet_balance')
+        .eq('is_staff', true)
+        .order('email')
+      if (error) return json({ error: 'Could not list staff' }, 500)
+      return json({ users: data || [] })
+    }
+
+    // ── Grant / revoke staff role ────────────────────────────────────────
+    if (action === 'grant_staff' || action === 'revoke_staff') {
+      const { user_id } = body
+      if (!user_id) return json({ error: 'user_id required' }, 400)
+      const { error } = await admin.rpc('set_staff_role', {
+        p_target_user_id: user_id,
+        p_is_staff: action === 'grant_staff',
+        p_actor_id: user.id,
+      })
+      if (error) return json({ error: 'Could not change staff role' }, 500)
+      return json({ success: true })
+    }
+
+    // ── List permissions for one staff user ─────────────────────────────
+    if (action === 'list_permissions') {
+      const { user_id } = body
+      if (!user_id) return json({ error: 'user_id required' }, 400)
+      const { data, error } = await admin
+        .from('staff_permissions')
+        .select('permission_key, is_enabled, auto_approve')
+        .eq('user_id', user_id)
+      if (error) return json({ error: 'Could not list staff permissions' }, 500)
+      return json({ permissions: data || [] })
+    }
+
+    // ── Set a single permission ──────────────────────────────────────────
+    if (action === 'set_permission') {
+      const { user_id, permission_key, is_enabled } = body
+      if (!user_id || !permission_key) return json({ error: 'user_id and permission_key required' }, 400)
+      if (permission_key === 'setting_referral_pct') {
+        return json({ error: 'Referral commissions have been retired' }, 400)
+      }
+      if (!STAFF_PERMISSION_KEYS.has(String(permission_key))) {
+        return json({ error: 'Unknown staff permission' }, 400)
+      }
+      const { data: target, error: targetError } = await admin
+        .from('profiles')
+        .select('is_staff, is_admin, account_suspended')
+        .eq('id', user_id)
+        .maybeSingle()
+      if (targetError || !target || target.is_staff !== true || target.is_admin === true || target.account_suspended === true) {
+        return json({ error: 'Permissions can only be changed for an active staff account' }, 403)
+      }
+      const enableNow = is_enabled === true
+      // The server chooses the approval mode. Never trust the browser's
+      // auto_approve value, and never auto-approve a balance adjustment.
+      const { error } = await admin
+        .from('staff_permissions')
+        .upsert(
+          { user_id, permission_key, is_enabled: enableNow, auto_approve: enableNow && permission_key !== 'action_adjust_balance' },
+          { onConflict: 'user_id,permission_key' }
+        )
+      if (error) return json({ error: 'Could not change staff permission' }, 500)
+      return json({ success: true })
+    }
+
+    // ── List all pending actions ─────────────────────────────────────────
+    if (action === 'list_pending') {
+      const { data, error } = await admin
+        .from('staff_pending_actions')
+        .select('*')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+      if (error) return json({ error: 'Could not list pending actions' }, 500)
+      return json({ actions: data || [] })
+    }
+
+  // ── Approve / reject a pending action ───────────────────────────────
+  if (action === 'approve_action' || action === 'reject_action') {
+      const { action_id } = body
+      if (!action_id) return json({ error: 'action_id required' }, 400)
+
+      if (action === 'approve_action') {
+        const { data: pendingAction, error: claimError } = await admin
+          .from('staff_pending_actions')
+          .update({ status: 'approved', reviewed_at: new Date().toISOString(), reviewed_by: user.id })
+          .eq('id', action_id)
+          .eq('status', 'pending')
+          .select('*')
+          .maybeSingle()
+
+        if (claimError) return json({ error: 'Could not claim pending action' }, 500)
+        if (!pendingAction?.id) return json({ error: 'Pending action not found or already reviewed' }, 409)
+
+        try {
+          await assertQueuedStaffPermission(admin, pendingAction)
+          await applyStaffAction(admin, pendingAction)
+        } catch (err) {
+          const { error: markFailedError } = await admin
+            .from('staff_pending_actions')
+            .update({ status: 'failed' })
+            .eq('id', action_id)
+          if (markFailedError) console.error('Could not mark failed staff action')
+          throw err
+        }
+      } else {
+        const { data: reviewed, error: reviewError } = await admin
+          .from('staff_pending_actions')
+          .update({ status: 'rejected', reviewed_at: new Date().toISOString(), reviewed_by: user.id })
+          .eq('id', action_id)
+          .eq('status', 'pending')
+          .select('id')
+          .maybeSingle()
+
+        if (reviewError) return json({ error: 'Could not review pending action' }, 500)
+        if (!reviewed?.id) return json({ error: 'Pending action not found or already reviewed' }, 409)
+      }
+
+      return json({ success: true })
+    }
+
+    return json({ error: 'Unknown action' }, 400)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Internal error'
+    const status = err instanceof HttpError ? err.status : 500
+    console.error('manage-staff error:', msg)
+    return json({ error: err instanceof HttpError ? msg : 'Staff request failed' }, status)
+  }
+})

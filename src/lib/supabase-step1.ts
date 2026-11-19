@@ -5,6 +5,8 @@ import { createClient } from '@supabase/supabase-js'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || ''
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || ''
+const PUBLIC_PRODUCT_GROUP_COLUMNS =
+  'id,category_id,name,description,price,features,stock_count,availability_status,is_sellable,is_active,created_at,quantity_discount_tiers'
 
 export const supabase = createClient(supabaseUrl, supabaseKey)
 
@@ -18,18 +20,8 @@ export interface Category {
   created_at: string
 }
 
-export interface ProductGroup {
-  id: string
-  category_id: string
-  name: string
-  platform: string
-  age_range: string | null
-  country: string | null
-  price_per_unit: number
-  available_stock: number
-  is_active: boolean
-  created_at: string
-}
+export type { ProductGroup } from './supabase'
+import type { ProductGroup } from './supabase'
 
 // Step 1: Get all categories
 export async function getCategories(): Promise<Category[]> {
@@ -53,7 +45,7 @@ export async function getProductGroupsByCategory(categoryId: string): Promise<Pr
   try {
     const { data, error } = await supabase
       .from('product_groups')
-      .select('*')
+      .select(PUBLIC_PRODUCT_GROUP_COLUMNS)
       .eq('category_id', categoryId)
       .eq('is_active', true)
       .order('name')
@@ -71,7 +63,7 @@ export async function getAllProductGroups(): Promise<ProductGroup[]> {
   try {
     const { data, error } = await supabase
       .from('product_groups')
-      .select('*')
+      .select(PUBLIC_PRODUCT_GROUP_COLUMNS)
       .eq('is_active', true)
       .order('name')
 

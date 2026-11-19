@@ -3,16 +3,37 @@ import { useSearchParams, useNavigate } from 'react-router-dom'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react'
-import { ercasPayService } from '@/lib/ercasPay'
+import { verifyAndCreditWalletSecure } from '@/lib/supabase'
 import { useAuth } from '@/contexts/SimpleAuth'
 import Navbar from '@/components/NavbarAuth'
+import Footer from '@/components/Footer'
+import { useCurrency } from '@/contexts/CurrencyContext'
+import { trackRevenueEvent } from '@/lib/revenue-os'
+import { getPaymentStorageItem, removePaymentStorageItem, setPaymentStorageItem } from '@/lib/paymentStorage'
 
 export default function PaymentCallbackPage() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, refreshWalletBalance } = useAuth()
+  const { formatPrice } = useCurrency()
   const [status, setStatus] = useState<'loading' | 'success' | 'failed' | 'error'>('loading')
   const [paymentData, setPaymentData] = useState<any>(null)
+
+  useEffect(() => {
+    trackRevenueEvent({
+      eventType: 'PAGE_VIEWED',
+      userId: user?.id || null,
+      surface: 'payment_callback',
+      metadata: {
+        has_reference: Boolean(
+          searchParams.get('transactionReference') ||
+          searchParams.get('transaction_reference') ||
+          searchParams.get('reference') ||
+          searchParams.get('trxref')
+        ),
+      },
+    })
+  }, [searchParams, user?.id])
 
   useEffect(() => {
     const transactionReference = searchParams.get('transactionReference') || 
@@ -22,38 +43,81 @@ export default function PaymentCallbackPage() {
     
     if (!transactionReference) {
       setStatus('error')
+      trackRevenueEvent({
+        eventType: 'OFFER_DISMISSED',
+        userId: user?.id || null,
+        surface: 'payment_callback_missing_reference',
+      })
       return
     }
 
-    verifyPayment(transactionReference)
+    verifyAndCredit(transactionReference)
   }, [searchParams])
 
-  const verifyPayment = async (transactionReference: string) => {
+  const verifyAndCredit = async (transactionReference: string) => {
     try {
-      const verification = await ercasPayService.verifyPayment(transactionReference)
+      // Use the secure Edge Function to verify AND credit the wallet server-side
+      const result = await verifyAndCreditWalletSecure(transactionReference)
       
-      if (verification.success && verification.data) {
-        if (verification.data.status === 'SUCCESSFUL') {
-          setStatus('success')
-          setPaymentData(verification.data)
-          
-          // TODO: Update user wallet balance in Supabase
-          // await updateWalletBalance(user?.id, verification.data.amount)
-          
-        } else if (verification.data.status === 'PENDING') {
-          setStatus('loading')
-          // Retry verification after a delay
-          setTimeout(() => verifyPayment(transactionReference), 3000)
-        } else {
-          setStatus('failed')
-          setPaymentData(verification.data)
+      if (result.success) {
+        setStatus('success')
+        trackRevenueEvent({
+          eventType: 'OFFER_ACCEPTED',
+          userId: user?.id || null,
+          surface: 'payment_callback_verified',
+          metadata: {
+            already_processed: Boolean(result.already_processed),
+            amount_ngn: result.amount || 0,
+          },
+        })
+        setPaymentData({
+          amount: result.amount,
+          reference: transactionReference,
+          newBalance: result.new_balance,
+          alreadyProcessed: result.already_processed,
+        })
+        
+        // Refresh wallet balance in the auth context
+        await refreshWalletBalance()
+        
+        removePaymentStorageItem('pending_topup')
+        
+        // Mark as processed to prevent duplicate polling
+        const processedTxs = JSON.parse(getPaymentStorageItem('processed_transactions') || '[]')
+        if (!processedTxs.includes(transactionReference)) {
+          processedTxs.push(transactionReference)
+          setPaymentStorageItem('processed_transactions', JSON.stringify(processedTxs))
         }
+        
+        // Notify other components
+        window.dispatchEvent(new CustomEvent('transactionAdded'))
+      } else if (result.error?.includes('pending') || result.error?.includes('PENDING')) {
+        trackRevenueEvent({
+          eventType: 'OFFER_ACCEPTED',
+          userId: user?.id || null,
+          surface: 'payment_callback_pending_retry',
+        })
+        // Payment still pending at Ercas - retry after delay
+        setTimeout(() => verifyAndCredit(transactionReference), 5000)
       } else {
-        setStatus('error')
+        setStatus('failed')
+        trackRevenueEvent({
+          eventType: 'OFFER_DISMISSED',
+          userId: user?.id || null,
+          surface: 'payment_callback_failed',
+          metadata: { reason: 'verification_failed' },
+        })
+        setPaymentData({ reference: transactionReference, error: result.error })
       }
     } catch (error) {
       console.error('Payment verification failed:', error)
       setStatus('error')
+      trackRevenueEvent({
+        eventType: 'OFFER_DISMISSED',
+        userId: user?.id || null,
+        surface: 'payment_callback_error',
+        metadata: { reason: 'unexpected_error' },
+      })
     }
   }
 
@@ -78,8 +142,10 @@ export default function PaymentCallbackPage() {
         }
       case 'success':
         return {
-          title: 'Payment Successful!',
-          description: `Your wallet has been topped up with ₦${paymentData?.amount?.toLocaleString() || '0'}.`
+          title: paymentData?.alreadyProcessed ? 'Payment Already Processed!' : 'Payment Successful!',
+          description: paymentData?.alreadyProcessed 
+            ? 'Your wallet balance is already up to date.'
+            : `${formatPrice(paymentData?.amount || 0)} has been added to your wallet.`
         }
       case 'failed':
         return {
@@ -97,12 +163,12 @@ export default function PaymentCallbackPage() {
   const message = getStatusMessage()
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background to-muted/20">
+    <div className="min-h-screen bg-background">
       <Navbar />
       
-      <div className="container mx-auto px-6 py-16">
-        <div className="max-w-md mx-auto">
-          <Card className="text-center">
+      <main className="mx-auto max-w-md px-4 py-10">
+        <div>
+          <Card className="rounded-2xl border-slate-200 bg-white/85 text-center shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
             <CardHeader className="pb-4">
               <div className="flex justify-center mb-4">
                 {getStatusIcon()}
@@ -120,7 +186,7 @@ export default function PaymentCallbackPage() {
                 <div className="bg-muted/50 rounded-lg p-4 space-y-2">
                   <div className="flex justify-between text-sm">
                     <span>Amount:</span>
-                    <span className="font-medium">₦{paymentData.amount?.toLocaleString()}</span>
+                    <span className="font-medium">{formatPrice(paymentData.amount || 0)}</span>
                   </div>
                   <div className="flex justify-between text-sm">
                     <span>Reference:</span>
@@ -138,7 +204,10 @@ export default function PaymentCallbackPage() {
               <div className="flex flex-col gap-3">
                 {status === 'success' && (
                   <Button 
-                    onClick={() => navigate('/wallet')}
+                    onClick={() => {
+                      trackRevenueEvent({ eventType: 'OFFER_ACCEPTED', userId: user?.id || null, surface: 'payment_callback_wallet_cta' })
+                      navigate('/wallet')
+                    }}
                     className="w-full"
                   >
                     View Wallet
@@ -147,7 +216,10 @@ export default function PaymentCallbackPage() {
                 
                 {status === 'failed' && (
                   <Button 
-                    onClick={() => navigate('/wallet')}
+                    onClick={() => {
+                      trackRevenueEvent({ eventType: 'OFFER_ACCEPTED', userId: user?.id || null, surface: 'payment_callback_retry_cta' })
+                      navigate('/wallet')
+                    }}
                     className="w-full"
                   >
                     Try Again
@@ -156,7 +228,10 @@ export default function PaymentCallbackPage() {
                 
                 {status === 'error' && (
                   <Button 
-                    onClick={() => navigate('/support')}
+                    onClick={() => {
+                      trackRevenueEvent({ eventType: 'SUPPORT_HANDOFF', userId: user?.id || null, surface: 'payment_callback_error_cta' })
+                      navigate('/support')
+                    }}
                     variant="outline"
                     className="w-full"
                   >
@@ -166,16 +241,20 @@ export default function PaymentCallbackPage() {
 
                 <Button 
                   variant="outline" 
-                  onClick={() => navigate('/dashboard')}
+                  onClick={() => {
+                    trackRevenueEvent({ eventType: 'OFFER_ACCEPTED', userId: user?.id || null, surface: 'payment_callback_return_cta' })
+                    navigate('/dashboard')
+                  }}
                   className="w-full"
                 >
-                  Return to Dashboard
+                  Return to Wallet
                 </Button>
               </div>
             </CardContent>
           </Card>
         </div>
-      </div>
+      </main>
+      <Footer />
     </div>
   )
 }

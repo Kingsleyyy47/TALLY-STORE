@@ -1,0 +1,1195 @@
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
+import { ngnMinorUnits } from '../_shared/ngn-amount.mjs';
+import { sameBillsRequest } from '../_shared/bills-idempotency.mjs';
+
+// ── revenue-events.ts (inlined) ──
+export const REVENUE_EVENT_TYPES = [
+  'SESSION_STARTED',
+  'PAGE_VIEWED',
+  'PRODUCT_IMPRESSION',
+  'PRODUCT_VIEWED',
+  'SEARCHED',
+  'FILTER_USED',
+  'SORT_USED',
+  'PRODUCT_CLICKED',
+  'BUY_CLICKED',
+  'PAYMENT_STARTED',
+  'PAYMENT_PROVIDER_LOADED',
+  'PAYMENT_ATTEMPTED',
+  'PAYMENT_COMPLETED',
+  'PAYMENT_FAILED',
+  'PRODUCT_PURCHASED',
+  'PRODUCT_PURCHASE_REVERSED',
+  'PRODUCT_REJECTED',
+  'SMS_ORDER_CANCELLED',
+  'SMS_ORDER_COMPLETED',
+  'SMS_ORDER_REFUNDED',
+  'RECOMMENDATION_SHOWN',
+  'RECOMMENDATION_CLICKED',
+  'RECOMMENDATION_DISMISSED',
+  'PROMOTION_SHOWN',
+  'PROMOTION_CLICKED',
+  'OFFER_SHOWN',
+  'OFFER_ACCEPTED',
+  'OFFER_DISMISSED',
+  'CHAT_OPENED',
+  'CHAT_MESSAGE',
+  'CHAT_INTENT',
+  'CHAT_PRODUCT_SHOWN',
+  'SUPPORT_HANDOFF',
+  'CHECKOUT_ABANDONED',
+  'RETURN_VISIT',
+] as const
+
+export type RevenueEventType = (typeof REVENUE_EVENT_TYPES)[number]
+
+export type RevenueRequestContext = {
+  visitor_id?: string | null
+  session_id?: string | null
+  path?: string | null
+  referrer?: string | null
+  device?: string | null
+  display_currency?: string | null
+  attribution?: Record<string, unknown> | null
+  traffic_quality?: string | null
+}
+
+const knownRevenueEventTypes = new Set<string>(REVENUE_EVENT_TYPES as readonly string[])
+
+export function isKnownRevenueEventType(eventType: string): eventType is RevenueEventType {
+  return knownRevenueEventTypes.has(eventType)
+}
+
+export function sanitizeRevenueEventType(source: string, eventType: string): RevenueEventType | null {
+  if (!isKnownRevenueEventType(eventType)) {
+    console.warn(`Unsupported revenue event type from ${source}: ${eventType}`)
+    return null
+  }
+  return eventType
+}
+
+const SENSITIVE_REVENUE_METADATA_KEY = /(^|_|\b)(password|passcode|otp|pin|token|secret|api[_-]?key|authorization|cookie|session|email|phone|account[_-]?number|accountnumber|account[_-]?name|bank[_-]?name|wallet[_-]?address|pay[_-]?address|address|memo|tag|hash|reference|payment[_-]?reference|transaction[_-]?reference|transaction[_-]?id|payment[_-]?id|purchase[_-]?id|provider[_-]?request[_-]?id|provider[_-]?response|api[_-]?response|raw[_-]?response|response[_-]?body|activation[_-]?id|external[_-]?order[_-]?id|order[_-]?id|idempotency[_-]?key|recipient|username|login|profile[_-]?url|url|link|comment|comments|group|groups)(\b|_)?/i
+
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+export async function sanitizeRevenueEventId(source: string, eventId: string) {
+  const normalizedSource = source.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 48) || 'event'
+  const hash = await sha256Hex(`${source}:${eventId}`)
+  return `server:${normalizedSource}:${hash.slice(0, 48)}`
+}
+
+function sanitizeRevenueMetadataValue(value: unknown, depth = 0): unknown {
+  if (value == null) return value
+  if (depth > 4) return '[truncated]'
+
+  if (typeof value === 'number' || typeof value === 'boolean') return value
+
+  if (typeof value === 'string') {
+    const redacted = value
+      .replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted_url]')
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted_email]')
+      .replace(/(?:\+?\d[\s().-]*){10,}/g, '[redacted_number]')
+      .replace(/\b(?:[a-f0-9]{32,}|[A-Za-z0-9_-]{48,})\b/g, '[redacted_token]')
+    return redacted.length > 240 ? `${redacted.slice(0, 240)}...` : redacted
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 30).map((item) => sanitizeRevenueMetadataValue(item, depth + 1))
+  }
+
+  if (typeof value === 'object') {
+    const output: Record<string, unknown> = {}
+    for (const [key, child] of Object.entries(value as Record<string, unknown>).slice(0, 80)) {
+      output[key] = SENSITIVE_REVENUE_METADATA_KEY.test(key)
+        ? '[redacted]'
+        : sanitizeRevenueMetadataValue(child, depth + 1)
+    }
+    return output
+  }
+
+  return String(value)
+}
+
+export function sanitizeRevenueMetadata(metadata: Record<string, unknown> = {}) {
+  return sanitizeRevenueMetadataValue(metadata) as Record<string, unknown>
+}
+
+function cleanRevenueContextText(value: unknown, maxLength = 240) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed ? trimmed.slice(0, maxLength) : null
+}
+
+function cleanRevenueContextId(value: unknown) {
+  const text = cleanRevenueContextText(value, 120)
+  if (!text) return null
+  return /^[a-z0-9:_-]{8,120}$/i.test(text) ? text : null
+}
+
+function cleanRevenueContextPath(value: unknown) {
+  const text = cleanRevenueContextText(value, 240)
+  if (!text) return null
+  try {
+    const url = new URL(text, 'https://tallystore.local')
+    return url.pathname || '/'
+  } catch {
+    return text.split('?')[0].slice(0, 240) || null
+  }
+}
+
+function cleanRevenueContextReferrer(value: unknown) {
+  const text = cleanRevenueContextText(value, 240)
+  if (!text) return null
+  try {
+    const url = new URL(text)
+    return `${url.origin}${url.pathname || '/'}`.slice(0, 240)
+  } catch {
+    return null
+  }
+}
+
+export function sanitizeRevenueRequestContext(input: unknown): RevenueRequestContext {
+  const context = input && typeof input === 'object' ? input as Record<string, unknown> : {}
+  const device = cleanRevenueContextText(context.device, 40)
+  const displayCurrency = cleanRevenueContextText(context.display_currency, 12)
+  const trafficQuality = cleanRevenueContextText(context.traffic_quality, 40)
+  const attribution = context.attribution && typeof context.attribution === 'object'
+    ? sanitizeRevenueMetadata(context.attribution as Record<string, unknown>)
+    : null
+
+  return {
+    visitor_id: cleanRevenueContextId(context.visitor_id),
+    session_id: cleanRevenueContextId(context.session_id),
+    path: cleanRevenueContextPath(context.path),
+    referrer: cleanRevenueContextReferrer(context.referrer),
+    device: device && ['mobile', 'desktop', 'tablet', 'unknown'].includes(device.toLowerCase()) ? device.toLowerCase() : null,
+    display_currency: displayCurrency && /^[A-Z]{3,8}$/.test(displayCurrency) ? displayCurrency : null,
+    attribution,
+    traffic_quality: trafficQuality && /^[a-z_ -]{3,40}$/i.test(trafficQuality) ? trafficQuality.toLowerCase().replace(/\s+/g, '_') : null,
+  }
+}
+
+export function revenueContextEventColumns(context?: RevenueRequestContext | null) {
+  return {
+    visitor_id: context?.visitor_id || null,
+    session_id: context?.session_id || null,
+    path: context?.path || null,
+    referrer: context?.referrer || null,
+    device: context?.device || null,
+  }
+}
+
+export function revenueContextMetadata(context?: RevenueRequestContext | null) {
+  if (!context) return {}
+  return {
+    display_currency: context.display_currency || undefined,
+    attribution: context.attribution || undefined,
+    traffic_quality: context.traffic_quality || undefined,
+  }
+}
+
+
+// ── Inlined shared modules (dashboard deploy cannot resolve _shared/) ──────────
+
+// ── sagecloud-client.ts ──
+/**
+ * SageCloud API Client
+ * Handles bank transfers, airtime, data, electricity, and TV bills
+ * Documentation: https://docs.sagecloud.ng
+ *
+ * Migrated to the new platform (app.sagecloud.ng / api.sagecloud.ng) -
+ * old base URL was https://sagecloud.ng/api/v2.
+ */
+
+const SAGECLOUD_API_URL = 'https://api.sagecloud.ng/api';
+
+interface SageCloudConfig {
+  publicKey: string;
+  secretKey: string;
+}
+
+interface AuthResponse {
+  success: boolean;
+  data: {
+    business_name: string;
+    token: {
+      access_token: string;
+      token_type: string;
+      expires_at: string;
+    };
+  };
+}
+
+interface BalanceResponse {
+  success: boolean;
+  status: string;
+  general_wallet: {
+    is_gl: number;
+    can_be_negative: number;
+    account_number: string;
+    balance: string;
+    commission: number;
+    status: string;
+    type: string | null;
+  };
+  sme_data_wallet: {
+    balance: string;
+    status: string;
+  };
+  corporate_data_wallet: {
+    balance: string;
+    status: string;
+  };
+}
+
+interface TransferParams {
+  reference: string;
+  bank_code: string;
+  account_number: string;
+  account_name: string;
+  amount: number;
+  narration: string;
+}
+
+interface TransferResponse {
+  success: boolean;
+  status: string;
+  message: string;
+}
+
+interface ValidateAccountParams {
+  bank_code: string;
+  account_number: string;
+}
+
+interface AirtimeParams {
+  reference: string;
+  network: 'MTN' | 'GLO' | 'AIRTEL' | '9MOBILE';
+  service: string; // e.g., 'MTNVTU', 'GLOVTU'
+  phone: string;
+  amount: string;
+}
+
+interface AirtimeResponse {
+  success: boolean;
+  status: string;
+  message: string;
+  reference: string;
+}
+
+interface DataPlan {
+  type: string;
+  code: string;
+  description: string;
+  amount: string;
+  price: string;
+  value: string;
+  duration: string;
+}
+
+interface DataLookupResponse {
+  success: boolean;
+  data: DataPlan[];
+}
+
+interface PurchaseDataParams {
+  reference: string;
+  type: string; // e.g., 'MTNDATA'
+  code: string; // Plan code from lookup
+  network: 'MTN' | 'GLO' | 'AIRTEL' | '9MOBILE';
+  phone: string;
+  provider: string; // e.g., 'MTN'
+}
+
+interface RequeryResponse {
+  success: boolean;
+  message: string;
+  transaction: {
+    type: string;
+    reference: string;
+    status: 'successful' | 'pending' | 'failed';
+    date: string;
+  };
+  data?: any;
+}
+
+// Result from balance check with detailed info for alerting
+export interface BalanceCheckResult {
+  hasBalance: boolean;
+  currentBalance: number;
+  requestedAmount: number;
+  shortfall: number;
+  isLowBalance: boolean; // true if balance < LOW_BALANCE_THRESHOLD
+  isCriticalBalance: boolean; // true if balance < CRITICAL_BALANCE_THRESHOLD
+}
+
+// Thresholds for balance alerts (in NGN)
+const LOW_BALANCE_THRESHOLD = 50000; // ₦50,000 - warn admin
+const CRITICAL_BALANCE_THRESHOLD = 10000; // ₦10,000 - critical alert
+
+export class SageCloudClient {
+  private config: SageCloudConfig;
+  private authToken: string | null = null;
+  private tokenExpiry: Date | null = null;
+
+  constructor(config: SageCloudConfig) {
+    this.config = config;
+  }
+
+  /**
+   * Get OAuth2 authentication token
+   * Token expiry is returned in response, we cache until then
+   */
+  private async getAuthToken(): Promise<string> {
+    // Check if token is still valid
+    if (this.authToken && this.tokenExpiry && this.tokenExpiry > new Date()) {
+      return this.authToken;
+    }
+
+    // Create Basic Auth header (Base64 encoded "PublicKey:SecretKey")
+    const credentials = btoa(`${this.config.publicKey}:${this.config.secretKey}`);
+
+    const response = await fetch(`${SAGECLOUD_API_URL}/merchant/authorization`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'Authorization': `Basic ${credentials}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`SageCloud authentication failed (${response.status})`);
+    }
+
+    const data: AuthResponse = await response.json();
+    this.authToken = data.data.token.access_token;
+    this.tokenExpiry = new Date(data.data.token.expires_at);
+
+    return this.authToken;
+  }
+
+  /**
+   * Make authenticated request to SageCloud API
+   */
+  private async makeRequest(
+    endpoint: string,
+    options: RequestInit = {}
+  ): Promise<any> {
+    const token = await this.getAuthToken();
+
+    const headers: Record<string, string> = {
+      'Accept': 'application/json',
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`,
+      ...options.headers as Record<string, string>,
+    };
+
+    const response = await fetch(`${SAGECLOUD_API_URL}${endpoint}`, {
+      ...options,
+      headers,
+    });
+
+    if (!response.ok) {
+      throw new Error(`SageCloud API error (${response.status})`);
+    }
+
+    return response.json();
+  }
+
+  /**
+   * Get wallet balance
+   */
+  async getBalance(): Promise<BalanceResponse> {
+    return this.makeRequest('/wallet/balance');
+  }
+
+  /**
+   * Validate bank account (verify account name)
+   */
+  async validateBankAccount(params: ValidateAccountParams): Promise<any> {
+    return this.makeRequest('/transfer/verify-bank-account', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Transfer funds to bank account
+   */
+  async transfer(params: TransferParams): Promise<TransferResponse> {
+    return this.makeRequest('/transfer/fund-transfer', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Purchase airtime
+   */
+  async purchaseAirtime(params: AirtimeParams): Promise<AirtimeResponse> {
+    return this.makeRequest('/airtime', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Get available data plans for a provider
+   */
+  async getDataPlans(provider: 'MTNDATA' | 'GLODATA' | 'AIRTELDATA' | '9MOBILEDATA'): Promise<DataLookupResponse> {
+    return this.makeRequest(`/internet/data/lookup?provider=${provider}`);
+  }
+
+  /**
+   * Purchase data bundle
+   */
+  async purchaseData(params: PurchaseDataParams): Promise<AirtimeResponse> {
+    return this.makeRequest('/internet/data', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  }
+
+  /**
+   * Requery transaction status
+   */
+  async requeryTransaction(reference: string): Promise<RequeryResponse> {
+    return this.makeRequest('/transaction/requery', {
+      method: 'POST',
+      body: JSON.stringify({ reference }),
+    });
+  }
+
+  /**
+   * Check if balance is sufficient for transaction
+   * @deprecated Use checkBalanceWithDetails for comprehensive checking
+   */
+  async hasBalance(amount: number): Promise<boolean> {
+    const result = await this.checkBalanceWithDetails(amount);
+    return result.hasBalance;
+  }
+
+  /**
+   * Get balance as number
+   */
+  async getBalanceAmount(): Promise<number> {
+    const balance = await this.getBalance();
+    return parseFloat(balance.general_wallet.balance);
+  }
+
+  /**
+   * Comprehensive balance check with detailed info for alerting
+   * Returns detailed info about balance status for admin alerts
+   */
+  async checkBalanceWithDetails(amount: number): Promise<BalanceCheckResult> {
+    const balance = await this.getBalance();
+    const currentBalance = parseFloat(balance.general_wallet.balance);
+    const shortfall = Math.max(0, amount - currentBalance);
+    
+    return {
+      hasBalance: currentBalance >= amount,
+      currentBalance,
+      requestedAmount: amount,
+      shortfall,
+      isLowBalance: currentBalance < LOW_BALANCE_THRESHOLD,
+      isCriticalBalance: currentBalance < CRITICAL_BALANCE_THRESHOLD,
+    };
+  }
+
+  /**
+   * Get balance thresholds for external use
+   */
+  static getThresholds() {
+    return {
+      LOW_BALANCE_THRESHOLD,
+      CRITICAL_BALANCE_THRESHOLD,
+    };
+  }
+}
+
+// Export singleton instance creator
+export function createSageCloudClient(config: SageCloudConfig): SageCloudClient {
+  return new SageCloudClient(config);
+}
+
+// ── staff-purchase-guard.ts ──
+async function purchaseGuardSha256Hex(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+function cleanPurchaseGuardIp(value: string | null) {
+  if (!value) return null
+  const first = value.split(',')[0]?.trim() || ''
+  const withoutPort = first.includes('.') ? first.replace(/:\d+$/, '') : first
+  const cleaned = withoutPort.replace(/[^a-fA-F0-9:.[\]]/g, '').replace(/^\[|\]$/g, '')
+  if (!cleaned || cleaned.length > 80) return null
+  return cleaned
+}
+
+function getPurchaseGuardIp(req?: Request | null) {
+  if (!req) return null
+  return cleanPurchaseGuardIp(
+    req.headers.get('cf-connecting-ip') ||
+      req.headers.get('x-real-ip') ||
+      req.headers.get('x-forwarded-for') ||
+      req.headers.get('forwarded')?.match(/for="?([^";,]+)"?/i)?.[1] ||
+      null,
+  )
+}
+
+function getPurchaseGuardUserAgent(req?: Request | null) {
+  return Array.from(String(req?.headers.get('user-agent') || '')).filter((char) => {
+    const code = char.charCodeAt(0)
+    return code >= 32 && code !== 127
+  }).join('').trim().slice(0, 500)
+}
+
+async function getWalletRequestForensics(req: Request, route: string) {
+  const userAgent = getPurchaseGuardUserAgent(req)
+  return {
+    request_id: req.headers.get('x-request-id') || req.headers.get('x-correlation-id') || crypto.randomUUID(),
+    route,
+    ip_address: getPurchaseGuardIp(req),
+    user_agent: userAgent || null,
+    user_agent_hash: userAgent ? await purchaseGuardSha256Hex(userAgent) : null,
+    device_fingerprint: req.headers.get('x-device-fingerprint') || req.headers.get('x-client-device-id') || null,
+    forwarded_for: req.headers.get('x-forwarded-for') || null,
+    cf_ray: req.headers.get('cf-ray') || null,
+    vercel_id: req.headers.get('x-vercel-id') || null,
+  }
+}
+
+
+export async function assertPurchasingCustomer(admin: any, userId: string, req?: Request | null, amountNgn?: number) {
+  const { data: profile, error } = await admin
+    .from('profiles')
+    .select('is_staff, is_admin, account_suspended')
+    .eq('id', userId)
+    .single()
+
+  if (error) {
+    throw new Error('Could not verify purchase permission')
+  }
+
+  if (profile?.is_staff || profile?.is_admin) {
+    throw new Error('Staff and admin accounts can browse and check out, but only customer accounts can complete purchases.')
+  }
+
+  if (profile?.account_suspended) {
+    throw new Error('Purchasing is paused while this wallet is under security review. Please contact support.')
+  }
+
+  const { data: truth, error: truthError } = await admin.rpc('wallet_financial_truth_internal', { p_user_id: userId })
+  const spendable = Number(truth?.confirmed_spendable)
+  if (truthError || !truth || typeof truth.spending_blocked !== 'boolean' ||
+      truth.confirmed_spendable == null || !Number.isFinite(spendable) || spendable < 0) {
+    throw new Error('Could not verify wallet funds for purchase')
+  }
+  if (truth.spending_blocked) {
+    throw new Error('Purchasing is paused while this wallet is under security review. Please contact support.')
+  }
+  if (amountNgn !== undefined && (!Number.isFinite(amountNgn) || amountNgn <= 0 || spendable < amountNgn)) {
+    throw new Error('Insufficient verified funds for purchase')
+  }
+
+}
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
+
+async function applyWalletTransaction(
+  supabaseAdmin: any,
+  params: {
+    userId: string;
+    type: string;
+    amount: number;
+    reference?: string;
+    description?: string;
+    idempotencyKey?: string;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  const { data, error } = await supabaseAdmin.rpc('apply_wallet_transaction', {
+    p_user_id: params.userId,
+    p_type: params.type,
+    p_amount: params.amount,
+    p_reference: params.reference || null,
+    p_description: params.description || null,
+    p_idempotency_key: params.idempotencyKey || null,
+    p_metadata: params.metadata || {},
+    p_currency: 'NGN',
+    p_balance_type: 'wallet',
+    p_external_payment_id: null,
+    p_created_by: null,
+  });
+
+  if (error) throw new Error(error.message || 'Wallet transaction failed');
+  const result = data as any;
+  if (!result?.success) throw new Error(result?.error || 'Wallet transaction failed');
+  return result;
+}
+
+/**
+ * Log admin alert for low SageCloud balance
+ */
+async function logAdminAlert(
+  supabaseAdmin: any,
+  alertType: 'low_balance' | 'critical_balance' | 'insufficient_balance',
+  balanceInfo: BalanceCheckResult,
+  context: { transaction_type: string; user_id: string; reference?: string }
+) {
+  const alertMessage = alertType === 'critical_balance'
+    ? `🚨 CRITICAL: SageCloud balance (₦${balanceInfo.currentBalance.toLocaleString()}) is below critical threshold (₦${CRITICAL_BALANCE_THRESHOLD.toLocaleString()})`
+    : alertType === 'low_balance'
+    ? `⚠️ WARNING: SageCloud balance (₦${balanceInfo.currentBalance.toLocaleString()}) is below warning threshold (₦${LOW_BALANCE_THRESHOLD.toLocaleString()})`
+    : `❌ FAILED: Insufficient SageCloud balance. Needed: ₦${balanceInfo.requestedAmount.toLocaleString()}, Available: ₦${balanceInfo.currentBalance.toLocaleString()}, Shortfall: ₦${balanceInfo.shortfall.toLocaleString()}`;
+
+  console.error(`[ADMIN ALERT] ${alertMessage}`);
+  console.error(`[ADMIN ALERT] Context: ${JSON.stringify(context)}`);
+
+  // Log to admin_alerts table for dashboard visibility
+  try {
+    await supabaseAdmin
+      .from('admin_alerts')
+      .insert({
+        alert_type: alertType,
+        severity: alertType === 'critical_balance' ? 'critical' : alertType === 'low_balance' ? 'warning' : 'error',
+        message: alertMessage,
+        context: {
+          ...context,
+          balance_info: balanceInfo,
+        },
+        acknowledged: false,
+      });
+  } catch (dbError) {
+    // Don't fail the transaction if alert logging fails
+    console.error('[ADMIN ALERT] Failed to log to database:', dbError);
+  }
+}
+
+async function recordRevenueEvent(
+  supabaseAdmin: any,
+  input: {
+    eventType: RevenueEventType;
+    eventId: string;
+    userId?: string | null;
+    surface?: string;
+    revenueContext?: RevenueRequestContext | null;
+    metadata?: Record<string, unknown>;
+  }
+) {
+  const eventType = sanitizeRevenueEventType('purchase-bills', input.eventType);
+  if (!eventType) return;
+
+  const { error } = await supabaseAdmin.from('revenue_events').upsert({
+    event_id: await sanitizeRevenueEventId('purchase-bills', input.eventId),
+    event_type: eventType,
+    ...revenueContextEventColumns(input.revenueContext),
+    user_id: input.userId || null,
+    surface: input.surface || 'bills',
+    metadata: sanitizeRevenueMetadata({
+      ...input.metadata,
+      ...revenueContextMetadata(input.revenueContext),
+    }),
+  }, { onConflict: 'event_id', ignoreDuplicates: true });
+
+  if (error) {
+    console.error(`Failed to record bills revenue event ${eventType}:`, error.message);
+  }
+}
+
+serve(async (req) => {
+  // Handle CORS preflight requests
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders });
+  }
+
+  try {
+    // Fail closed during wallet security review. Re-enable only after this
+    // route is migrated to the wallet authorization engine end to end.
+    if (String(Deno.env.get('BILLS_ENABLED') || '').trim().toLowerCase() !== 'true') {
+      return new Response(
+        JSON.stringify({
+          success: false,
+          code: 'BILLS_PAUSED',
+          error: 'Bills payment is temporarily disabled during wallet security review.',
+        }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 503,
+        },
+      );
+    }
+
+    // Get user from auth header
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      throw new Error('Missing authorization header');
+    }
+
+    // Initialize Supabase client
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      {
+        global: {
+          headers: { Authorization: authHeader },
+        },
+        auth: {
+          persistSession: false,
+        },
+      }
+    );
+
+    // Get authenticated user - pass token directly like get-data-plans
+    const {
+      data: { user },
+      error: userError,
+    } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''));
+
+    if (userError || !user) {
+      throw new Error('Unauthorized');
+    }
+
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+    );
+    await assertPurchasingCustomer(supabaseAdmin, user.id, req);
+    const walletRequestForensics = await getWalletRequestForensics(req, 'purchase-bills');
+
+    // Parse request body - includes payment_source and idempotency_key
+    const { transaction_type, amount, service_provider, phone, data_plan_code, payment_source = 'wallet', idempotency_key, revenue_context } = await req.json();
+    const revenueContext = sanitizeRevenueRequestContext(revenue_context);
+
+    // Normalize provider to uppercase
+    const normalizedProvider = service_provider?.toUpperCase();
+
+    // Validate required fields
+    if (!transaction_type || !amount || !normalizedProvider || !phone) {
+      throw new Error('Missing required fields: transaction_type, amount, service_provider, phone');
+    }
+
+    // Validate idempotency key (required to prevent double-charges)
+    if (!idempotency_key || typeof idempotency_key !== 'string' || idempotency_key.length < 10) {
+      throw new Error('Valid idempotency_key is required');
+    }
+
+    // Validate transaction type
+    if (!['airtime', 'data'].includes(transaction_type)) {
+      throw new Error('Invalid transaction_type. Must be "airtime" or "data"');
+    }
+
+    const normalizedPhone = String(phone).replace(/\D/g, '');
+    if (!/^0\d{10}$/.test(normalizedPhone)) {
+      throw new Error('Invalid phone number. Enter an 11-digit Nigerian phone number.');
+    }
+
+    // Validate payment source
+    if (payment_source !== 'wallet') {
+      throw new Error('Crypto balance payments are temporarily disabled. Please use your TallyStore wallet.');
+    }
+
+    // Validate service provider
+    const validProviders = ['MTN', 'GLO', 'AIRTEL', '9MOBILE'];
+    if (!validProviders.includes(normalizedProvider)) {
+      throw new Error(`Invalid service_provider. Must be one of: ${validProviders.join(', ')}`);
+    }
+
+    const clientAmountMinor = ngnMinorUnits(amount);
+    if (clientAmountMinor === null) {
+      throw new Error('Invalid amount');
+    }
+    if (transaction_type === 'data' && !data_plan_code) {
+      throw new Error('data_plan_code is required for data purchases');
+    }
+
+    // Idempotency check - prevent double-charges
+    const { data: existingTransaction, error: existingTransactionError } = await supabaseAdmin
+      .from('bills_transactions')
+      .select('id, reference, status, transaction_type, amount, service_provider, service_code, beneficiary_phone, payment_source')
+      .eq('user_id', user.id)
+      .eq('idempotency_key', idempotency_key)
+      .maybeSingle();
+
+    if (existingTransactionError) {
+      throw new Error('Could not verify existing bills transaction');
+    }
+
+    if (existingTransaction) {
+      if (!sameBillsRequest(existingTransaction, {
+        transaction_type,
+        amount,
+        service_provider: normalizedProvider,
+        service_code: data_plan_code || null,
+        beneficiary_phone: normalizedPhone,
+        payment_source,
+      })) {
+        return new Response(
+          JSON.stringify({ success: false, error: 'Idempotency key is already used for a different purchase.' }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 409 },
+        );
+      }
+      console.log('Bills idempotency hit: returning existing transaction.');
+      const unresolved = existingTransaction.status === 'pending';
+      return new Response(
+        JSON.stringify({
+          success: !unresolved && existingTransaction.status === 'successful',
+          transaction_id: existingTransaction.id,
+          reference: existingTransaction.reference,
+          status: unresolved ? 'outcome_unknown' : existingTransaction.status,
+          transaction_type: existingTransaction.transaction_type,
+          amount: existingTransaction.amount,
+          service_provider: existingTransaction.service_provider,
+          beneficiary_phone: existingTransaction.beneficiary_phone,
+          payment_source: existingTransaction.payment_source,
+          message: unresolved ? 'Provider outcome is being checked; no new order was sent.' : 'Transaction already processed',
+          idempotency_hit: true,
+        }),
+        {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          status: 200,
+        }
+      );
+    }
+
+    // Validate amount
+    let purchaseAmount = clientAmountMinor / 100;
+    if (transaction_type === 'airtime' && (purchaseAmount < 50 || purchaseAmount > 50000)) {
+      throw new Error('Airtime amount must be between ₦50 and ₦50,000');
+    }
+
+    // For data purchase, validate plan code
+    // Initialize SageCloud client before any charge calculation that depends on
+    // provider-owned catalogue data. Never trust client-supplied data-plan prices.
+    const sageCloudClient = createSageCloudClient({
+      publicKey: Deno.env.get('SAGECLOUD_PUBLIC_KEY') ?? '',
+      secretKey: Deno.env.get('SAGECLOUD_SECRET_KEY') ?? '',
+    });
+
+    if (transaction_type === 'data') {
+      const dataType = `${normalizedProvider}DATA` as 'MTNDATA' | 'GLODATA' | 'AIRTELDATA' | '9MOBILEDATA';
+      const plansResponse = await sageCloudClient.getDataPlans(dataType);
+      if (!plansResponse.success || !Array.isArray(plansResponse.data)) {
+        throw new Error('Could not verify live data plan price. Please try again.');
+      }
+      const livePlan = plansResponse.data.find((plan) => String(plan.code) === String(data_plan_code));
+      const liveAmountMinor = ngnMinorUnits(livePlan?.price);
+      if (!livePlan || liveAmountMinor === null) {
+        throw new Error('Selected data plan is no longer available.');
+      }
+      if (clientAmountMinor !== liveAmountMinor) {
+        const livePlanPrice = liveAmountMinor / 100;
+        throw new Error(`Data plan price changed from ₦${purchaseAmount.toLocaleString()} to ₦${livePlanPrice.toLocaleString()}. Please refresh and try again.`);
+      }
+      purchaseAmount = liveAmountMinor / 100;
+    }
+
+    await assertPurchasingCustomer(supabaseAdmin, user.id, req, purchaseAmount);
+
+    // Check SageCloud balance
+    const sageCloudBalance = await sageCloudClient.getBalanceAmount();
+    const balanceCheck: BalanceCheckResult = {
+      hasBalance: sageCloudBalance >= purchaseAmount,
+      currentBalance: sageCloudBalance,
+      requestedAmount: purchaseAmount,
+      shortfall: Math.max(0, purchaseAmount - sageCloudBalance),
+      isLowBalance: sageCloudBalance < LOW_BALANCE_THRESHOLD,
+      isCriticalBalance: sageCloudBalance < CRITICAL_BALANCE_THRESHOLD,
+    };
+    
+    // Trigger admin alerts based on balance thresholds
+    if (balanceCheck.isCriticalBalance) {
+      await logAdminAlert(supabaseAdmin, 'critical_balance', balanceCheck, {
+        transaction_type,
+        user_id: user.id,
+      });
+    } else if (balanceCheck.isLowBalance) {
+      await logAdminAlert(supabaseAdmin, 'low_balance', balanceCheck, {
+        transaction_type,
+        user_id: user.id,
+      });
+    }
+    
+    // If insufficient balance, log alert and return user-friendly error
+    if (!balanceCheck.hasBalance) {
+      await logAdminAlert(supabaseAdmin, 'insufficient_balance', balanceCheck, {
+        transaction_type,
+        user_id: user.id,
+      });
+      throw new Error('This service is temporarily unavailable. Please contact support.');
+    }
+
+    // Generate unique reference
+    const reference = `TALLY-${transaction_type.toUpperCase()}-${Date.now()}-${user.id.substring(0, 8)}`;
+
+    await recordRevenueEvent(supabaseAdmin, {
+      eventType: 'PAYMENT_STARTED',
+      eventId: `bills:PAYMENT_STARTED:${idempotency_key}`,
+      userId: user.id,
+      surface: 'bills',
+      revenueContext,
+      metadata: {
+        reference,
+        transaction_type,
+        amount_ngn: purchaseAmount,
+        service_provider: normalizedProvider,
+        beneficiary_phone: normalizedPhone,
+        payment_source,
+        idempotency_key,
+      },
+    });
+    await recordRevenueEvent(supabaseAdmin, {
+      eventType: 'PAYMENT_ATTEMPTED',
+      eventId: `bills:PAYMENT_ATTEMPTED:${idempotency_key}`,
+      userId: user.id,
+      surface: 'bills',
+      revenueContext,
+      metadata: {
+        reference,
+        transaction_type,
+        amount_ngn: purchaseAmount,
+        service_provider: normalizedProvider,
+        beneficiary_phone: normalizedPhone,
+        payment_source,
+        idempotency_key,
+      },
+    });
+
+    // Create bills transaction record (pending status) - includes payment_source and idempotency_key
+    const { data: billRecord, error: dbError } = await supabaseAdmin
+      .from('bills_transactions')
+      .insert({
+        user_id: user.id,
+        reference,
+        transaction_type,
+        amount: purchaseAmount,
+        status: 'pending',
+        service_provider: normalizedProvider,
+        service_code: data_plan_code || null,
+        beneficiary_phone: normalizedPhone,
+        payment_source: payment_source,
+        idempotency_key: idempotency_key,
+      })
+      .select()
+      .single();
+
+    if (dbError) {
+      console.error('Bills transaction record creation failed');
+      throw new Error('Failed to create transaction record');
+    }
+
+    try {
+      await applyWalletTransaction(supabaseAdmin, {
+        userId: user.id,
+        type: 'purchase',
+        amount: purchaseAmount,
+        reference,
+        description: `${transaction_type === 'airtime' ? 'Airtime' : 'Data'} purchase: ${normalizedProvider} ${normalizedPhone}`,
+        idempotencyKey: `bills:purchase:${idempotency_key}`,
+        metadata: {
+          source: 'purchase-bills',
+          source_order_id: billRecord.id,
+          source_order_table: 'bills_transactions',
+          transaction_id: billRecord.id,
+          transaction_type,
+          service_provider: normalizedProvider,
+          beneficiary_phone: normalizedPhone,
+          service_code: data_plan_code || null,
+          request_forensics: walletRequestForensics,
+        },
+      });
+    } catch (debitError: unknown) {
+      await supabaseAdmin
+        .from('bills_transactions')
+        .update({
+          status: 'failed',
+          sagecloud_response: JSON.stringify({ error: 'wallet_debit_failed', stage: 'wallet_debit' }),
+        })
+        .eq('id', billRecord.id);
+      throw debitError;
+    }
+
+    // Process purchase via SageCloud
+    let purchaseResponse;
+    let finalStatus = 'pending';
+    
+    try {
+      if (transaction_type === 'airtime') {
+        // Purchase airtime
+        const service = `${normalizedProvider}VTU`; // e.g., MTNVTU, GLOVTU
+        
+        purchaseResponse = await sageCloudClient.purchaseAirtime({
+          reference,
+          network: normalizedProvider as 'MTN' | 'GLO' | 'AIRTEL' | '9MOBILE',
+          service,
+          phone: normalizedPhone,
+          amount: purchaseAmount.toString(),
+        });
+
+      } else {
+        // Purchase data
+        const dataType = `${normalizedProvider}DATA`; // e.g., MTNDATA, GLODATA
+        
+        purchaseResponse = await sageCloudClient.purchaseData({
+          reference,
+          type: dataType,
+          code: data_plan_code!,
+          network: normalizedProvider as 'MTN' | 'GLO' | 'AIRTEL' | '9MOBILE',
+          phone: normalizedPhone,
+          provider: normalizedProvider,
+        });
+      }
+      // Any non-success response needs provider reconciliation before a refund.
+      finalStatus = purchaseResponse.success && purchaseResponse.status === 'success'
+        ? 'successful' : 'pending';
+
+      // Update transaction with response
+      const { error: statusError } = await supabaseAdmin
+        .from('bills_transactions')
+        .update({
+          status: finalStatus,
+          sagecloud_reference: purchaseResponse.reference || reference,
+          sagecloud_response: JSON.stringify({
+            outcome: finalStatus === 'successful' ? 'confirmed_success' : 'outcome_unknown',
+            provider_status: String(purchaseResponse.status || 'unknown').slice(0, 80),
+          }),
+          completed_at: finalStatus === 'successful' ? new Date().toISOString() : null,
+        })
+        .eq('id', billRecord.id);
+      if (statusError) throw new Error('Could not record provider outcome');
+
+      if (finalStatus !== 'successful') {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            transaction_id: billRecord.id,
+            reference,
+            status: 'outcome_unknown',
+            error: 'Provider outcome is being checked. The wallet debit remains posted pending review.',
+          }),
+          {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            status: 200,
+          }
+        );
+      }
+
+      await recordRevenueEvent(supabaseAdmin, {
+        eventType: 'PAYMENT_COMPLETED',
+        eventId: `bills:PAYMENT_COMPLETED:${idempotency_key}`,
+        userId: user.id,
+        surface: 'bills',
+        revenueContext,
+        metadata: {
+          transaction_id: billRecord.id,
+          reference,
+          transaction_type,
+          amount_ngn: purchaseAmount,
+          service_provider: normalizedProvider,
+          beneficiary_phone: normalizedPhone,
+          payment_source,
+          provider_reference: purchaseResponse.reference || reference,
+        },
+      });
+      await recordRevenueEvent(supabaseAdmin, {
+        eventType: 'PRODUCT_PURCHASED',
+        eventId: `bills:PRODUCT_PURCHASED:${idempotency_key}`,
+        userId: user.id,
+        surface: 'bills',
+        revenueContext,
+        metadata: {
+          transaction_id: billRecord.id,
+          reference,
+          transaction_type,
+          amount_ngn: purchaseAmount,
+          service_provider: normalizedProvider,
+          beneficiary_phone: normalizedPhone,
+          payment_source,
+          provider_reference: purchaseResponse.reference || reference,
+        },
+      });
+    } catch {
+      // A lost response or later database failure does not prove non-delivery.
+      // Keep the debit and original reference for manual/provider reconciliation.
+      console.error('SageCloud bills outcome requires review');
+      const { error: reviewError } = await supabaseAdmin
+        .from('bills_transactions')
+        .update({
+          status: 'pending',
+          sagecloud_response: JSON.stringify({ outcome: 'outcome_unknown' }),
+        })
+        .eq('id', billRecord.id)
+        .neq('status', 'successful');
+      if (reviewError) console.error('Could not record bills outcome review state');
+      return new Response(
+        JSON.stringify({
+          success: false,
+          transaction_id: billRecord.id,
+          reference,
+          status: 'outcome_unknown',
+          error: 'Provider outcome is being checked. The wallet debit remains posted pending review.',
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 },
+      );
+    }
+
+    // Return response
+    return new Response(
+      JSON.stringify({
+        success: true,
+        transaction_id: billRecord.id,
+        reference,
+        status: finalStatus,
+        transaction_type,
+        amount: purchaseAmount,
+        service_provider: normalizedProvider,
+        beneficiary_phone: normalizedPhone,
+        payment_source: payment_source,
+        message: finalStatus === 'successful' 
+          ? `${transaction_type === 'airtime' ? 'Airtime' : 'Data'} purchase successful` 
+          : `${transaction_type === 'airtime' ? 'Airtime' : 'Data'} purchase is being processed`,
+      }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    const clientMessages = new Set([
+      'Missing authorization header', 'Unauthorized',
+      'Missing required fields: transaction_type, amount, service_provider, phone',
+      'Valid idempotency_key is required',
+      'Invalid transaction_type. Must be "airtime" or "data"',
+      'Invalid phone number. Enter an 11-digit Nigerian phone number.',
+      'Crypto balance payments are temporarily disabled. Please use your TallyStore wallet.',
+      'Invalid service_provider. Must be one of: MTN, GLO, AIRTEL, 9MOBILE',
+      'Invalid amount', 'Airtime amount must be between ₦50 and ₦50,000',
+      'data_plan_code is required for data purchases',
+      'Insufficient verified funds for purchase',
+      'Purchasing is paused while this wallet is under security review. Please contact support.',
+    ]);
+    console.error(clientMessages.has(message) ? 'Bills request rejected' : 'Bills request failed before confirmed completion');
+    
+    // Return 200 status with success: false so client can read the error message
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: clientMessages.has(message) ? message : 'Bills purchase is temporarily unavailable. Please contact support.',
+      }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        status: 200,
+      }
+    );
+  }
+});

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -10,110 +10,127 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { 
   Globe, 
   Smartphone, 
-  ShoppingCart, 
   Palette, 
   Code, 
   Zap, 
   Check, 
   Star, 
   MessageCircle,
-  Phone,
-  Mail,
   Clock,
   Award
 } from 'lucide-react'
 import NavbarAuth from '@/components/NavbarAuth'
 import Footer from '@/components/Footer'
+import { RecommendationStrip } from '@/components/RecommendationCard'
+import { useRecommendations } from '@/hooks/useRecommendations'
 import WalletBalanceWidget from '@/components/WalletBalanceWidget'
+import PageBreadcrumb from '@/components/PageBreadcrumb'
+import { useSupportSettings } from '@/hooks/useSupportSettings'
+import { useAuth } from '@/contexts/SimpleAuth'
+import { trackRevenueEvent } from '@/lib/revenue-os'
+import { useCurrency } from '@/contexts/CurrencyContext'
 
 // Web service packages
 const webServices = [
   {
     id: 'basic',
-    name: 'Basic Website',
+    name: 'Starter Website',
     price: 50000,
     duration: '3-5 days',
+    tagline: 'Get Your Business Online Fast',
     features: [
-      'Up to 5 pages',
-      'Mobile responsive design',
-      'Contact form',
-      'Basic SEO setup',
-      'Free hosting for 1 year',
-      '1 revision included'
+      'Beautiful 5-page website',
+      'Works perfectly on phones & computers',
+      'Customers can easily contact you',
+      'Appear on Google search',
+      'We host it FREE for 1 year',
+      'Simple changes included'
     ],
-    ideal: 'Small businesses, personal portfolios'
+    benefits: 'Stop losing customers who can\'t find you online',
+    ideal: 'Perfect for: Hair salons, restaurants, small shops, freelancers'
   },
   {
     id: 'business',
-    name: 'Business Website',
+    name: 'Business Builder',
     price: 150000,
     duration: '7-10 days',
     popular: true,
+    tagline: 'Get More Customers Every Month',
     features: [
-      'Up to 10 pages',
-      'Custom design',
-      'Mobile responsive',
-      'Advanced SEO',
-      'Contact forms & maps',
-      'Social media integration',
-      'Free hosting for 1 year',
-      '3 revisions included',
-      'Content management system'
+      'Professional 10-page website',
+      'Rank higher on Google searches',
+      'Show your location on maps',
+      'Link to Instagram & WhatsApp',
+      'Professional design that builds trust',
+      'Update content yourself anytime',
+      'FREE hosting for 1 year',
+      '3 design changes included'
     ],
-    ideal: 'Growing businesses, service providers'
+    benefits: 'Bring in 5-10 new customers monthly with a stronger yearly pipeline',
+    ideal: 'Perfect for: Growing businesses, service providers, consultants'
   },
   {
     id: 'ecommerce',
-    name: 'E-commerce Store',
+    name: 'Online Store',
     price: 300000,
     duration: '14-21 days',
+    tagline: 'Sell 24/7 While You Sleep',
     features: [
-      'Unlimited pages',
-      'Online store functionality',
-      'Payment gateway integration',
-      'Inventory management',
-      'Customer accounts',
-      'Order management',
-      'Mobile responsive',
-      'Advanced SEO',
-      'Free hosting for 1 year',
-      '5 revisions included',
-      'Admin dashboard'
+      'Full online shop - unlimited products',
+      'Accept payments automatically',
+      'Manage products & stock easily',
+      'Customers create accounts',
+      'Track all your orders',
+      'Works on phones & computers',
+      'Get found on Google',
+      'FREE hosting for 1 year',
+      'Easy-to-use admin panel'
     ],
-    ideal: 'Online retailers, product sellers'
-  },
-  {
-    id: 'custom',
-    name: 'Custom Development',
-    price: 500000,
-    duration: '21+ days',
-    features: [
-      'Fully custom solution',
-      'Advanced functionality',
-      'Database integration',
-      'API development',
-      'Third-party integrations',
-      'User authentication',
-      'Admin panels',
-      'Mobile app (optional)',
-      'Unlimited revisions',
-      'Ongoing support'
-    ],
-    ideal: 'Large businesses, complex projects'
+    benefits: 'Accept online orders and keep your storefront open even when you are busy',
+    ideal: 'Perfect for: Clothing stores, electronics, food vendors, any retailer'
   }
 ]
 
-// Technologies we work with
-const technologies = [
-  { name: 'React', icon: Code },
-  { name: 'WordPress', icon: Globe },
-  { name: 'Shopify', icon: ShoppingCart },
-  { name: 'Mobile Apps', icon: Smartphone },
-  { name: 'Custom Design', icon: Palette },
-  { name: 'Fast Delivery', icon: Zap }
+// Why you need a website - benefits focused
+const benefits = [
+  { 
+    title: 'Get Found by Customers', 
+    description: 'Appear when people search for your business on Google',
+    icon: Globe 
+  },
+  { 
+    title: 'Make Money 24/7', 
+    description: 'Take orders and bookings even when you\'re sleeping',
+    icon: Clock 
+  },
+  { 
+    title: 'Look Professional', 
+    description: 'Give customers a clear place to verify what you offer',
+    icon: Award 
+  },
+  { 
+    title: 'Beat Your Competition', 
+    description: 'Stand out from competitors without websites',
+    icon: Star 
+  },
+  { 
+    title: 'Works on All Phones', 
+    description: 'Looks perfect whether customers use iPhone or Android',
+    icon: Smartphone 
+  },
+  { 
+    title: 'Easy to Update', 
+    description: 'Change prices, add products - no tech skills needed',
+    icon: Zap 
+  }
 ]
 
 export default function WebServicesPage() {
+  const support = useSupportSettings()
+  const { user } = useAuth()
+  const { recommendations: recs } = useRecommendations({ limit: 3 })
+  const { formatPrice } = useCurrency()
+  const supportUrl = support.whatsappUrl || support.telegramUrl || ''
   const [selectedService, setSelectedService] = useState('')
   const [formData, setFormData] = useState({
     name: '',
@@ -129,7 +146,49 @@ export default function WebServicesPage() {
   const [showForm, setShowForm] = useState(false)
   const [submitSuccess, setSubmitSuccess] = useState(false)
 
+  useEffect(() => {
+    trackRevenueEvent({
+      eventType: 'PAGE_VIEWED',
+      userId: user?.id || null,
+      surface: 'web_services',
+      metadata: {
+        package_count: webServices.length,
+        has_support_url: Boolean(supportUrl),
+      },
+    })
+
+    const today = new Date().toISOString().slice(0, 10)
+    webServices.forEach((service, index) => {
+      trackRevenueEvent({
+        eventType: 'OFFER_SHOWN',
+        userId: user?.id || null,
+        surface: 'web_services_package',
+        metadata: {
+          service_id: service.id,
+          service_name: service.name,
+          position: index + 1,
+          price_ngn: service.price,
+          duration: service.duration,
+          manually_configured_offer: true,
+        },
+        eventId: `OFFER_SHOWN:${today}:web_services:${service.id}`,
+      })
+    })
+  }, [supportUrl, user?.id])
+
   const handleServiceSelect = (serviceId: string) => {
+    const service = webServices.find((entry) => entry.id === serviceId)
+    trackRevenueEvent({
+      eventType: 'OFFER_ACCEPTED',
+      userId: user?.id || null,
+      surface: 'web_services_package',
+      metadata: {
+        service_id: serviceId,
+        service_name: service?.name || null,
+        price_ngn: service?.price || null,
+        action: 'open_quote_form',
+      },
+    })
     setSelectedService(serviceId)
     setShowForm(true)
     setFormData(prev => ({ ...prev, projectType: serviceId }))
@@ -137,8 +196,21 @@ export default function WebServicesPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    // In real app, this would send to backend
-    console.log('Form submitted:', formData)
+    const selected = webServices.find((entry) => entry.id === selectedService)
+    trackRevenueEvent({
+      eventType: 'OFFER_ACCEPTED',
+      userId: user?.id || null,
+      surface: 'web_services_quote_form',
+      metadata: {
+        service_id: selectedService || formData.projectType || null,
+        service_name: selected?.name || null,
+        budget_range: formData.budget || null,
+        timeline: formData.timeline || null,
+        has_company: Boolean(formData.company),
+        has_feature_notes: Boolean(formData.features.trim()),
+        has_description: Boolean(formData.description.trim()),
+      },
+    })
     setSubmitSuccess(true)
     setShowForm(false)
   }
@@ -147,22 +219,42 @@ export default function WebServicesPage() {
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
+  const handleSupportClick = (surface: string) => {
+    trackRevenueEvent({
+      eventType: 'SUPPORT_HANDOFF',
+      userId: user?.id || null,
+      surface,
+      metadata: {
+        destination: supportUrl ? 'configured_support_url' : 'support_center',
+        selected_service_id: selectedService || null,
+      },
+    })
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <NavbarAuth />
       
       {/* Wallet Balance Widget */}
-      <div className="container mx-auto px-6 pt-24 pb-4 max-w-6xl">
+      <div className="container mx-auto max-w-6xl px-4 pb-4 pt-4 sm:px-6">
+        <PageBreadcrumb items={[{ label: 'Services' }]} className="mb-4" />
         <WalletBalanceWidget showRefresh={true} />
       </div>
       
-      <div className="container mx-auto px-6 pb-12 max-w-6xl">
+      <div className="container mx-auto max-w-6xl px-4 pb-12 sm:px-6">
         {/* Header */}
         <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold mb-4">Professional Web Development Services</h1>
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            From simple websites to complex e-commerce platforms, we build digital solutions that grow your business
+          <h1 className="text-3xl sm:text-4xl font-bold mb-4">
+            Get a Website That Makes You Money
+          </h1>
+          <p className="text-lg sm:text-xl text-muted-foreground max-w-3xl mx-auto mb-6">
+            Your business loses customers every day without a website. We build simple, beautiful websites 
+            that bring customers to your door 24/7.
           </p>
+          <div className="inline-flex items-center gap-2 bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300 px-6 py-3 rounded-lg border border-green-200 dark:border-green-800">
+            <Check className="h-5 w-5" />
+            <span className="font-semibold">Starting at just {formatPrice(50000)} • Ready in 3-5 days</span>
+          </div>
         </div>
 
         {/* Success Message */}
@@ -175,26 +267,72 @@ export default function WebServicesPage() {
           </Alert>
         )}
 
-        {/* Technologies */}
+        {/* Why You Need a Website */}
         <div className="mb-16">
-          <h2 className="text-2xl font-semibold text-center mb-8">Technologies We Master</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-            {technologies.map((tech) => {
-              const Icon = tech.icon
+          <h2 className="text-2xl sm:text-3xl font-semibold text-center mb-3">
+            Why Your Business Needs a Website
+          </h2>
+          <p className="text-center text-muted-foreground mb-8 max-w-2xl mx-auto">
+            Stop losing money to competitors. Here's what a website does for you:
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            {benefits.map((benefit) => {
+              const Icon = benefit.icon
               return (
-                <Card key={tech.name} className="text-center p-4">
-                  <Icon className="h-8 w-8 mx-auto mb-2 text-primary" />
-                  <p className="font-medium">{tech.name}</p>
+                <Card key={benefit.title} className="p-6 hover:shadow-lg transition-shadow">
+                  <Icon className="h-10 w-10 mb-3 text-primary" />
+                  <h3 className="font-semibold text-lg mb-2">{benefit.title}</h3>
+                  <p className="text-muted-foreground text-sm">{benefit.description}</p>
                 </Card>
               )
             })}
           </div>
         </div>
 
+        {/* ROI Section */}
+        <div className="mb-16 bg-gradient-to-br from-primary/10 to-primary/5 dark:from-primary/20 dark:to-primary/10 rounded-2xl p-8 sm:p-12 border border-primary/20">
+          <div className="text-center mb-8">
+            <h2 className="text-2xl sm:text-3xl font-bold mb-4">
+              What a Website Helps You Do
+            </h2>
+            <p className="text-muted-foreground max-w-2xl mx-auto">
+              A website gives customers a clearer path to discover, contact, and buy from you.
+            </p>
+          </div>
+          
+          <div className="grid md:grid-cols-3 gap-6">
+            <Card className="p-6 text-center bg-white dark:bg-gray-800">
+              <div className="text-3xl font-bold text-green-600 mb-2">More reach</div>
+              <p className="text-sm text-muted-foreground">
+                Help customers find your business from search, social links, and direct referrals.
+              </p>
+            </Card>
+            
+            <Card className="p-6 text-center bg-white dark:bg-gray-800 border-2 border-primary">
+              <div className="text-3xl font-bold text-primary mb-2">24/7</div>
+              <p className="text-sm text-muted-foreground">
+                Let people inspect your services, send enquiries, or place orders outside business hours.
+              </p>
+            </Card>
+            
+            <Card className="p-6 text-center bg-white dark:bg-gray-800">
+              <div className="text-3xl font-bold text-orange-600 mb-2">Trust</div>
+              <p className="text-sm text-muted-foreground">
+                Present prices, photos, policies, and contact details in one organized place.
+              </p>
+            </Card>
+          </div>
+        </div>
+
         {/* Service Packages */}
         <div className="mb-16">
-          <h2 className="text-3xl font-semibold text-center mb-8">Choose Your Package</h2>
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <h2 className="text-2xl sm:text-3xl font-semibold text-center mb-3">
+            Choose What's Right for Your Business
+          </h2>
+          <p className="text-center text-muted-foreground mb-8">
+            All packages include FREE hosting for 1 year ({formatPrice(12000)} value)
+          </p>
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {webServices.map((service) => (
               <Card 
                 key={service.id} 
@@ -208,36 +346,44 @@ export default function WebServicesPage() {
                   </Badge>
                 )}
                 
-                <CardHeader className="text-center">
-                  <CardTitle className="text-xl">{service.name}</CardTitle>
+                <CardHeader className="text-center pb-4">
+                  <CardTitle className="text-xl mb-2">{service.name}</CardTitle>
+                  <p className="text-sm text-muted-foreground font-medium mb-3">{service.tagline}</p>
                   <div className="text-3xl font-bold text-primary">
-                    ₦{service.price.toLocaleString()}
+                    {formatPrice(service.price)}
                   </div>
-                  <CardDescription className="flex items-center justify-center gap-1">
+                  <CardDescription className="flex items-center justify-center gap-1 mt-2">
                     <Clock className="h-4 w-4" />
-                    {service.duration}
+                    Ready in {service.duration}
                   </CardDescription>
                 </CardHeader>
                 
                 <CardContent className="space-y-4">
+                  <div className="bg-green-50 dark:bg-green-950 p-3 rounded-lg border border-green-200 dark:border-green-800">
+                    <p className="text-sm font-medium text-green-800 dark:text-green-300">
+                      {service.benefits}
+                    </p>
+                  </div>
+                  
                   <div className="space-y-2">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase">What You Get:</p>
                     {service.features.map((feature, index) => (
-                      <div key={index} className="flex items-center gap-2 text-sm">
-                        <Check className="h-4 w-4 text-green-500 flex-shrink-0" />
+                      <div key={index} className="flex items-start gap-2 text-sm">
+                        <Check className="h-4 w-4 text-green-500 flex-shrink-0 mt-0.5" />
                         <span>{feature}</span>
                       </div>
                     ))}
                   </div>
                   
-                  <div className="pt-4 border-t">
-                    <p className="text-sm text-muted-foreground mb-3">
-                      <strong>Ideal for:</strong> {service.ideal}
+                  <div className="pt-4 border-t space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      {service.ideal}
                     </p>
                     <Button 
                       className="w-full"
                       onClick={() => handleServiceSelect(service.id)}
                     >
-                      Get Started
+                      Start Your Project
                     </Button>
                   </div>
                 </CardContent>
@@ -248,11 +394,11 @@ export default function WebServicesPage() {
 
         {/* Contact Form */}
         {showForm && (
-          <Card className="mb-16">
+          <Card className="mb-16 border-2 border-primary/30">
             <CardHeader>
-              <CardTitle>Tell Us About Your Project</CardTitle>
-              <CardDescription>
-                Fill out the form below and we'll get back to you within 24 hours with a detailed proposal
+              <CardTitle className="text-2xl">Let's Build Your Money-Making Website!</CardTitle>
+              <CardDescription className="text-base">
+                Tell us about your business. We'll send you a custom plan within 24 hours (FREE, no commitment)
               </CardDescription>
             </CardHeader>
             
@@ -310,11 +456,11 @@ export default function WebServicesPage() {
                         <SelectValue placeholder="Select budget range" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="under-100k">Under ₦100,000</SelectItem>
-                        <SelectItem value="100k-300k">₦100,000 - ₦300,000</SelectItem>
-                        <SelectItem value="300k-500k">₦300,000 - ₦500,000</SelectItem>
-                        <SelectItem value="500k-1m">₦500,000 - ₦1,000,000</SelectItem>
-                        <SelectItem value="above-1m">Above ₦1,000,000</SelectItem>
+                        <SelectItem value="under-100k">Under {formatPrice(100000)}</SelectItem>
+                        <SelectItem value="100k-300k">{formatPrice(100000)} - {formatPrice(300000)}</SelectItem>
+                        <SelectItem value="300k-500k">{formatPrice(300000)} - {formatPrice(500000)}</SelectItem>
+                        <SelectItem value="500k-1m">{formatPrice(500000)} - {formatPrice(1000000)}</SelectItem>
+                        <SelectItem value="above-1m">Above {formatPrice(1000000)}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -337,40 +483,53 @@ export default function WebServicesPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="description">Project Description *</Label>
+                  <Label htmlFor="description">What does your business do? *</Label>
                   <Textarea
                     id="description"
                     value={formData.description}
                     onChange={(e) => handleInputChange('description', e.target.value)}
-                    placeholder="Tell us about your project goals, target audience, and any specific requirements..."
+                    placeholder="Example: I sell clothes online, I'm a makeup artist, I run a restaurant..."
                     rows={4}
                     required
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="features">Special Features or Requirements</Label>
+                  <Label htmlFor="features">What do you want the website to do?</Label>
                   <Textarea
                     id="features"
                     value={formData.features}
                     onChange={(e) => handleInputChange('features', e.target.value)}
-                    placeholder="Any specific features, integrations, or functionalities you need..."
+                    placeholder="Example: Take orders, show my work, let customers book appointments, accept payments..."
                     rows={3}
                   />
                 </div>
 
-                <div className="flex gap-4">
-                  <Button type="submit" className="flex-1">
-                    Submit Project Request
+                <div className="flex flex-col sm:flex-row gap-4">
+                  <Button type="submit" className="flex-1 h-12 text-base">
+                    Get My FREE Quote
                   </Button>
                   <Button 
                     type="button" 
                     variant="outline" 
-                    onClick={() => setShowForm(false)}
+                    onClick={() => {
+                      trackRevenueEvent({
+                        eventType: 'OFFER_DISMISSED',
+                        userId: user?.id || null,
+                        surface: 'web_services_quote_form',
+                        metadata: { service_id: selectedService || formData.projectType || null },
+                      })
+                      setShowForm(false)
+                    }}
+                    className="h-12"
                   >
                     Cancel
                   </Button>
                 </div>
+                
+                <p className="text-xs text-center text-muted-foreground">
+                  🔒 Your information is safe. We never spam or share your details.
+                </p>
               </form>
             </CardContent>
           </Card>
@@ -378,78 +537,100 @@ export default function WebServicesPage() {
 
         {/* Why Choose Us */}
         <div className="mb-16">
-          <h2 className="text-3xl font-semibold text-center mb-8">Why Choose TallyStore Development?</h2>
-          <div className="grid md:grid-cols-3 gap-8">
-            <Card className="text-center p-6">
-              <Award className="h-12 w-12 text-primary mx-auto mb-4" />
-              <h3 className="font-semibold text-lg mb-2">Proven Expertise</h3>
-              <p className="text-muted-foreground">
-                Years of experience building successful digital platforms and e-commerce solutions
-              </p>
-            </Card>
-            
-            <Card className="text-center p-6">
+          <h2 className="text-2xl sm:text-3xl font-semibold text-center mb-8">
+            Why Businesses Trust TallyStore
+          </h2>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+            <Card className="text-center p-6 hover:shadow-lg transition-shadow">
               <Zap className="h-12 w-12 text-primary mx-auto mb-4" />
-              <h3 className="font-semibold text-lg mb-2">Fast Delivery</h3>
-              <p className="text-muted-foreground">
-                Quick turnaround times without compromising on quality or functionality
+              <h3 className="font-semibold text-lg mb-2">Lightning Fast</h3>
+              <p className="text-muted-foreground text-sm">
+                Your website ready in days, not months. Start making money faster
               </p>
             </Card>
             
-            <Card className="text-center p-6">
+            <Card className="text-center p-6 hover:shadow-lg transition-shadow">
+              <Award className="h-12 w-12 text-primary mx-auto mb-4" />
+              <h3 className="font-semibold text-lg mb-2">Proven Results</h3>
+              <p className="text-muted-foreground text-sm">
+                Clear project scope, practical delivery timelines, and simple handover.
+              </p>
+            </Card>
+            
+            <Card className="text-center p-6 hover:shadow-lg transition-shadow">
               <MessageCircle className="h-12 w-12 text-primary mx-auto mb-4" />
-              <h3 className="font-semibold text-lg mb-2">24/7 Support</h3>
-              <p className="text-muted-foreground">
-                Ongoing support and maintenance to keep your website running smoothly
+              <h3 className="font-semibold text-lg mb-2">Always Available</h3>
+              <p className="text-muted-foreground text-sm">
+                WhatsApp support whenever you need help or changes
               </p>
             </Card>
           </div>
         </div>
 
         {/* Contact Information */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Ready to Start Your Project?</CardTitle>
-            <CardDescription>
-              Contact our development team directly for custom quotes or urgent projects
+        <Card className="border-2 border-primary/20">
+          <CardHeader className="text-center pb-4">
+            <CardTitle className="text-2xl">Ready to Grow Your Business?</CardTitle>
+            <CardDescription className="text-base">
+              Let's talk about your project. Get a free quote in 24 hours!
             </CardDescription>
           </CardHeader>
           
           <CardContent>
-            <div className="grid md:grid-cols-3 gap-6">
-              <div className="flex items-center gap-3">
-                <Phone className="h-5 w-5 text-green-500" />
+            <div className="grid sm:grid-cols-2 gap-6">
+              <div className="flex flex-col items-center text-center gap-3 p-4 bg-emerald-50 dark:bg-emerald-950 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                <MessageCircle className="h-8 w-8 text-emerald-600" />
                 <div>
-                  <p className="font-medium text-green-600">WhatsApp Only</p>
-                  <p className="text-sm text-muted-foreground">09067679407</p>
+                  <p className="font-semibold text-emerald-700 dark:text-emerald-400 mb-1">Message Support</p>
+                  <p className="text-xs text-muted-foreground mb-3">Get in touch about your project directly.</p>
+                  {supportUrl ? (
+                    <Button asChild variant="default" size="sm" className="mt-3 bg-emerald-600 hover:bg-emerald-700">
+                      <a href={supportUrl} target="_blank" rel="noopener noreferrer" onClick={() => handleSupportClick('web_services_contact_card')}>
+                        Message us
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button asChild variant="default" size="sm" className="mt-3 bg-emerald-600 hover:bg-emerald-700">
+                      <a href="/support" onClick={() => handleSupportClick('web_services_contact_card')}>Support Center</a>
+                    </Button>
+                  )}
                 </div>
               </div>
-              
-              <div className="flex items-center gap-3">
-                <Mail className="h-5 w-5 text-primary" />
+
+              <div className="flex flex-col items-center text-center gap-3 p-4 bg-muted rounded-lg">
+                <Clock className="h-8 w-8 text-primary" />
                 <div>
-                  <p className="font-medium">Email</p>
-                  <p className="text-sm text-muted-foreground">wisdomthedev@gmail.com</p>
+                  <p className="font-semibold mb-1">Project Questions</p>
+                  <p className="text-xs text-muted-foreground mb-3">Send your business name, project type, and timeline.</p>
+                  {supportUrl ? (
+                    <Button asChild variant="outline" size="sm">
+                      <a href={supportUrl} target="_blank" rel="noopener noreferrer" onClick={() => handleSupportClick('web_services_questions_card')}>
+                        Message support
+                      </a>
+                    </Button>
+                  ) : (
+                    <Button asChild variant="outline" size="sm">
+                      <a href="/support" onClick={() => handleSupportClick('web_services_questions_card')}>Visit support</a>
+                    </Button>
+                  )}
                 </div>
               </div>
-              
-              <div className="flex items-center gap-3">
-                <MessageCircle className="h-5 w-5 text-gray-400" />
-                <div>
-                  <p className="font-medium text-gray-500">Telegram</p>
-                  <Button 
-                    variant="outline" 
-                    className="mt-2"
-                    onClick={() => window.open('https://t.me/Tallystoreorg', '_blank')}
-                  >
-                    Join Telegram
-                  </Button>
-                </div>
-              </div>
+            </div>
+            
+            <div className="mt-6 p-4 bg-yellow-50 dark:bg-yellow-950 rounded-lg border border-yellow-200 dark:border-yellow-800 text-center">
+              <p className="text-sm font-medium text-yellow-800 dark:text-yellow-300">
+                Prepare your logo, photos, product list, and preferred contact links before requesting a quote.
+              </p>
             </div>
           </CardContent>
         </Card>
       </div>
+
+      {recs.length > 0 && (
+        <div className="mx-auto max-w-7xl px-4 pb-10">
+          <RecommendationStrip products={recs} surface="web_services_page" actionType="SHOW_ALTERNATIVE" userId={user?.id} title="Explore more products" />
+        </div>
+      )}
 
       <Footer />
     </div>

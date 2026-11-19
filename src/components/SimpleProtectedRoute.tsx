@@ -1,17 +1,26 @@
 import { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '@/contexts/SimpleAuth'
+import { Button } from '@/components/ui/button'
 
 interface ProtectedRouteProps {
   children: ReactNode
   redirectTo?: string
-  requireRole?: 'user' | 'admin'
+  requireRole?: 'user' | 'admin' | 'staff'
+}
+
+function RoleLookupUnavailable({ message, retry }: { message: string; retry: () => Promise<void> }) {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center gap-4 px-6 text-center">
+      <p role="alert">{message}</p>
+      <Button type="button" onClick={() => void retry()}>Retry</Button>
+    </div>
+  )
 }
 
 export function ProtectedRoute({ children, redirectTo = '/login', requireRole }: ProtectedRouteProps) {
-  const { user, loading, isAdmin } = useAuth()
+  const { user, loading, isAdmin, isStaff, roleLookupError, retryRoleLookup } = useAuth()
 
-  // Show loading spinner while checking auth
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -20,13 +29,23 @@ export function ProtectedRoute({ children, redirectTo = '/login', requireRole }:
     )
   }
 
-  // Not authenticated - redirect to login
-  if (!user) {
-    return <Navigate to={redirectTo} replace />
+  if (!user) return <Navigate to={redirectTo} replace />
+  if (roleLookupError) {
+    return <RoleLookupUnavailable message={roleLookupError} retry={retryRoleLookup} />
   }
 
-  // Check role requirement
+  if (requireRole === 'user' && isAdmin) return <Navigate to="/admin" replace />
+  if (requireRole === 'user' && isStaff) return <Navigate to="/staff-admin" replace />
+
   if (requireRole === 'admin' && !isAdmin) {
+    // Staff members trying to hit /admin get sent to their own page
+    if (isStaff) return <Navigate to="/staff-admin" replace />
+    return <Navigate to="/dashboard" replace />
+  }
+
+  if (requireRole === 'staff' && isAdmin) return <Navigate to="/admin" replace />
+
+  if (requireRole === 'staff' && !isStaff && !isAdmin) {
     return <Navigate to="/dashboard" replace />
   }
 
@@ -39,7 +58,7 @@ interface PublicRouteProps {
 }
 
 export function PublicRoute({ children, redirectTo }: PublicRouteProps) {
-  const { user, loading, isAdmin } = useAuth()
+  const { user, loading, isAdmin, isStaff, roleLookupError, retryRoleLookup } = useAuth()
 
   // Show loading spinner while checking auth
   if (loading) {
@@ -52,7 +71,8 @@ export function PublicRoute({ children, redirectTo }: PublicRouteProps) {
 
   // Already authenticated - redirect to appropriate dashboard
   if (user) {
-    const defaultRedirect = isAdmin ? '/admin' : '/dashboard'
+    if (roleLookupError) return <RoleLookupUnavailable message={roleLookupError} retry={retryRoleLookup} />
+    const defaultRedirect = isAdmin ? '/admin' : isStaff ? '/staff-admin' : '/dashboard'
     return <Navigate to={redirectTo || defaultRedirect} replace />
   }
 

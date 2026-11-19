@@ -1,5 +1,7 @@
 import { Card, CardContent } from "@/components/ui/card"
-import { Facebook, Instagram, Camera, Music, Star, TrendingUp } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Facebook, Instagram, Camera, Music, Star, TrendingUp, ArrowRight } from "lucide-react"
+import { Link } from "react-router-dom"
 import { ScrollAnimationWrapper } from "@/components/ScrollAnimationWrapper"
 
 const ServicesSection = () => {
@@ -81,17 +83,31 @@ const ServicesSection = () => {
                     </div>
                   </div>
                   
-                  <CardContent className="p-5 text-center relative">
+                  <CardContent className="p-5 text-center relative space-y-4">
                     {/* Background glow effect - enhanced for dark mode */}
                     <div className="absolute inset-0 bg-gradient-primary opacity-0 group-hover:opacity-5 dark:group-hover:opacity-10 transition-opacity duration-500 rounded-lg"></div>
                     
-                    <div className="relative z-10">
-                      <h3 className="text-lg font-display font-semibold text-foreground mb-2 group-hover:text-primary dark:group-hover:text-primary-glow transition-colors duration-300">
-                        {service.name}
-                      </h3>
-                      <p className="text-sm text-muted-foreground leading-relaxed font-body">
-                        {service.description}
-                      </p>
+                    <div className="relative z-10 space-y-4">
+                      <div className="space-y-2">
+                        <h3 className="text-lg font-display font-semibold text-foreground mb-2 group-hover:text-primary dark:group-hover:text-primary-glow transition-colors duration-300">
+                          {service.name}
+                        </h3>
+                        <p className="text-sm text-muted-foreground leading-relaxed font-body">
+                          {service.description}
+                        </p>
+                      </div>
+
+                      {/* CTA Button */}
+                      <Link to="/products">
+                        <Button 
+                          variant="default" 
+                          size="default" 
+                          className="w-full hover:shadow-elegant transition-all duration-300"
+                        >
+                          Browse Accounts
+                          <ArrowRight className="ml-2 h-4 w-4 group-hover:translate-x-2 transition-transform duration-300" />
+                        </Button>
+                      </Link>
                     </div>
                   </CardContent>
                 </Card>

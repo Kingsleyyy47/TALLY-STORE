@@ -1,0 +1,4 @@
+-- Retired manual SQL Editor repair script. Intentionally no-op.
+-- The former client INSERT policy did not bind user_id to auth.uid(), and
+-- the UPDATE policy allowed any browser client to edit telemetry rows.
+-- Use ordered migration 20260924013000 for the reviewed replacement.

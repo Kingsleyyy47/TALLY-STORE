@@ -1,300 +1,696 @@
-import { useEffect, useState } from 'react'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { 
-  Wallet, 
-  History, 
-  Plus, 
-  ArrowUpRight, 
-  ArrowDownRight, 
+import { Button } from '@/components/ui/button'
+import {
+  ArrowDownRight,
+  ArrowUpRight,
   Calendar,
+  Bitcoin,
   CheckCircle,
   Clock,
-  XCircle
+  CreditCard,
+  Download,
+  Eye,
+  EyeOff,
+  Filter,
+  Headphones,
+  Landmark,
+  Plus,
+  Receipt,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  XCircle,
 } from 'lucide-react'
 import Navbar from '@/components/NavbarAuth'
 import Footer from '@/components/Footer'
+import { RecommendationStrip } from '@/components/RecommendationCard'
+import { useRecommendations } from '@/hooks/useRecommendations'
+import PageBreadcrumb from '@/components/PageBreadcrumb'
 import { TopUpWallet } from '@/components/TopUpWallet'
+import { PaymentVerificationCard } from '@/components/PaymentVerificationCard'
 import { useAuth } from '@/contexts/SimpleAuth'
+import { useCurrency } from '@/contexts/CurrencyContext'
 import { useToast } from '@/hooks/use-toast'
-import { usePaymentStatusChecker } from '@/hooks/usePaymentStatusChecker'
-import { getUserTransactions } from '@/lib/supabase'
+import { getUserTransactions, supabase } from '@/lib/supabase'
+import { trackRevenueEvent } from '@/lib/revenue-os'
+import {
+  classifyWalletTransaction,
+  getTransactionSignedAmount,
+  getWalletTransactionTitle,
+  isBalanceNeutralLedgerEvidence,
+  isDepositTransactionType,
+  type WalletTransactionKind,
+} from '@/lib/walletTransactions'
+
+type WalletTab = 'all' | WalletTransactionKind
+
+const quickAmounts = [5000, 10000, 20000, 50000, 100000]
+
+const walletTabs: Array<[WalletTab, string]> = [
+  ['all', 'Transactions'],
+  ['funding', 'Funding'],
+  ['purchase', 'Purchases'],
+  ['withdrawal', 'Withdrawals'],
+  ['restoration', 'Refunds'],
+]
+
+const getStatusIcon = (status: string) => {
+  switch (status) {
+    case 'completed':
+    case 'success':
+      return <CheckCircle className="h-4 w-4 text-emerald-500" />
+    case 'pending':
+    case 'processing':
+      return <Clock className="h-4 w-4 text-amber-500" />
+    case 'failed':
+    case 'cancelled':
+      return <XCircle className="h-4 w-4 text-red-500" />
+    default:
+      return <Clock className="h-4 w-4 text-slate-400" />
+  }
+}
+
+const getStatusBadgeClass = (status: string) => {
+  switch (status) {
+    case 'completed':
+    case 'success':
+      return 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+    case 'pending':
+    case 'processing':
+      return 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
+    case 'failed':
+    case 'cancelled':
+      return 'bg-red-500/10 text-red-600 dark:text-red-400'
+    default:
+      return 'bg-slate-500/10 text-slate-600 dark:text-slate-400'
+  }
+}
+
+const formatDateTime = (value: string) => {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Unknown date'
+  return date.toLocaleString('en-NG', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
 
 export default function WalletPage() {
-  const { user, walletBalance, refreshWalletBalance } = useAuth()
+  const { user, walletBalance, walletLoading, walletBalanceUnavailable, refreshWalletBalance, showBalances, toggleBalanceVisibility } = useAuth()
+  const { recommendations: recs } = useRecommendations({ limit: 3 })
+  const { currency, formatPrice } = useCurrency()
   const { toast } = useToast()
   const [transactions, setTransactions] = useState<any[]>([])
   const [isLoadingTransactions, setIsLoadingTransactions] = useState(false)
-  
-  // Auto-check for payment completions
-  usePaymentStatusChecker()
+  const [activeTab, setActiveTab] = useState<WalletTab>('all')
+  const [recordedBalanceNeedsReview, setRecordedBalanceNeedsReview] = useState(false)
 
-  // Load user transactions
-  const loadTransactions = async () => {
+  useEffect(() => {
+    let active = true
+    setRecordedBalanceNeedsReview(false)
+    if (!user?.id || walletLoading) return () => { active = false }
+
+    void Promise.resolve(supabase.rpc('my_wallet_funding_needs_review')).then(({ data, error }) => {
+      if (error) throw error
+      if (active) setRecordedBalanceNeedsReview(data === true)
+    }).catch((error) => {
+      console.error('Could not check recorded wallet funding status:', error)
+    })
+    return () => { active = false }
+  }, [user?.id, walletBalance, walletLoading])
+
+  const loadTransactions = useCallback(async () => {
     if (!user?.id) return
-    
+
     setIsLoadingTransactions(true)
     try {
       const userTransactions = await getUserTransactions(user.id)
-      console.log('📊 Raw transactions from database:', userTransactions);
-      console.log('📊 Number of transactions:', userTransactions.length);
-      console.log('📊 Transaction types:', userTransactions.map(t => ({ id: t.id, type: t.type, amount: t.amount, status: t.status, created_at: t.created_at })));
       setTransactions(userTransactions)
     } catch (error) {
       console.error('Failed to load transactions:', error)
       toast({
-        title: "Error",
-        description: "Failed to load transaction history.",
-        variant: "destructive",
+        title: 'Error',
+        description: 'Failed to load transaction history.',
+        variant: 'destructive',
       })
     } finally {
       setIsLoadingTransactions(false)
     }
-  }
+  }, [toast, user?.id])
 
   useEffect(() => {
     if (user) {
+      trackRevenueEvent({
+        eventType: 'PAGE_VIEWED',
+        userId: user.id,
+        surface: 'wallet',
+        metadata: { currency },
+      })
       refreshWalletBalance()
       loadTransactions()
     }
-  }, [user, refreshWalletBalance])
+  }, [currency, loadTransactions, refreshWalletBalance, user])
 
-  // Listen for transaction updates
   useEffect(() => {
     const handleTransactionUpdate = () => {
-      console.log('🔄 Transaction update detected, reloading...');
-      loadTransactions();
-    };
-
-    window.addEventListener('transactionAdded', handleTransactionUpdate);
-    return () => window.removeEventListener('transactionAdded', handleTransactionUpdate);
-  }, [loadTransactions])
-
-  // Calculate totals from real transactions
-  const totalTopups = transactions
-    .filter(t => t.type === 'topup' && t.status === 'completed')
-    .reduce((sum, t) => sum + t.amount, 0)
-    
-  const totalSpent = Math.abs(transactions
-    .filter(t => t.type === 'purchase' && t.status === 'completed')
-    .reduce((sum, t) => sum + t.amount, 0))
-
-  console.log('💰 Calculated totals - Topups:', totalTopups, 'Spent:', totalSpent);
-  console.log('📋 Current transactions:', transactions);
-
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return <CheckCircle className="h-4 w-4 text-green-500" />
-      case 'pending':
-        return <Clock className="h-4 w-4 text-yellow-500" />
-      case 'failed':
-        return <XCircle className="h-4 w-4 text-red-500" />
-      default:
-        return <Clock className="h-4 w-4 text-gray-400" />
+      loadTransactions()
+      refreshWalletBalance()
     }
+
+    window.addEventListener('transactionAdded', handleTransactionUpdate)
+    return () => window.removeEventListener('transactionAdded', handleTransactionUpdate)
+  }, [loadTransactions, refreshWalletBalance])
+
+  const totalTopups = useMemo(
+    () =>
+      transactions
+        .filter((transaction) => isDepositTransactionType(transaction.type) && ['completed', 'success'].includes(String(transaction.status).toLowerCase()))
+        .reduce((sum, transaction) => sum + Math.abs(Number(transaction.amount) || 0), 0),
+    [transactions],
+  )
+
+  const pendingBalance = useMemo(
+    () =>
+      transactions
+        .filter((transaction) => isDepositTransactionType(transaction.type) && ['pending', 'processing'].includes(String(transaction.status).toLowerCase()))
+        .reduce((sum, transaction) => sum + Math.abs(Number(transaction.amount) || 0), 0),
+    [transactions],
+  )
+
+  const totalSpent = useMemo(
+    () =>
+      transactions
+        .filter((transaction) => classifyWalletTransaction(transaction) === 'purchase' && ['completed', 'success'].includes(String(transaction.status).toLowerCase()))
+        .reduce((sum, transaction) => sum + Math.abs(Number(transaction.amount) || 0), 0),
+    [transactions],
+  )
+
+  const filteredTransactions = useMemo(() => {
+    if (activeTab === 'all') return transactions
+    return transactions.filter((transaction) => classifyWalletTransaction(transaction) === activeTab)
+  }, [activeTab, transactions])
+
+  const handleDownload = () => {
+    if (transactions.length === 0) return
+
+    trackRevenueEvent({
+      eventType: 'OFFER_ACCEPTED',
+      userId: user?.id || null,
+      surface: 'wallet_transaction_export',
+      metadata: {
+        transaction_count: transactions.length,
+        active_tab: activeTab,
+      },
+    })
+
+    const rows = [
+      ['Transaction', 'Type', 'Recorded amount', 'Wallet effect', 'Status', 'Reference', 'Date'],
+      ...transactions.map((transaction) => [
+        getWalletTransactionTitle(transaction),
+        isBalanceNeutralLedgerEvidence(transaction) ? 'evidence' : classifyWalletTransaction(transaction),
+        String(transaction.amount ?? 0),
+        String(getTransactionSignedAmount(transaction)),
+        String(transaction.status || ''),
+        String(transaction.reference || transaction.ercas_reference || transaction.id || ''),
+        formatDateTime(transaction.created_at),
+      ]),
+    ]
+    const csv = rows.map((row) => row.map((cell) => `"${cell.replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = 'tallystore-wallet-transactions.csv'
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const handleTopUpSuccess = () => {
+    trackRevenueEvent({
+      eventType: 'OFFER_ACCEPTED',
+      userId: user?.id || null,
+      surface: 'wallet_topup_completed_refresh',
+    })
+    refreshWalletBalance()
+    loadTransactions()
+    toast({
+      title: 'Wallet Updated',
+      description: 'Your wallet balance has been updated successfully.',
+    })
+  }
+
+  const walletBalanceDisplay = walletBalanceUnavailable ? 'Unavailable' : showBalances ? formatPrice(walletBalance) : '***'
+  const pendingBalanceDisplay = showBalances ? formatPrice(pendingBalance) : '***'
+  const totalTopupsDisplay = showBalances ? formatPrice(totalTopups) : '***'
+  const totalSpentDisplay = showBalances ? formatPrice(totalSpent) : '***'
+  const currencySymbol = currency === 'USD' ? '$' : '₦'
+
+  const handleWalletTabChange = (value: WalletTab) => {
+    setActiveTab(value)
+    trackRevenueEvent({
+      eventType: 'FILTER_USED',
+      userId: user?.id || null,
+      surface: 'wallet_transactions',
+      metadata: {
+        filter: value,
+        transaction_count: transactions.length,
+      },
+    })
+  }
+
+  const handleWalletSupportClick = (surface: string) => {
+    trackRevenueEvent({
+      eventType: 'SUPPORT_HANDOFF',
+      userId: user?.id || null,
+      surface,
+      metadata: {
+        active_tab: activeTab,
+      },
+    })
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-background to-muted/20">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_18%_0%,rgba(168,85,247,0.12),transparent_30rem),linear-gradient(180deg,#f8fafc_0%,#eef2f7_100%)] text-slate-950 dark:bg-[radial-gradient(circle_at_18%_0%,rgba(126,51,231,0.18),transparent_30rem),linear-gradient(180deg,#05070d_0%,#07111d_100%)] dark:text-white">
       <Navbar />
-      
-      <div className="container mx-auto px-6 py-8">
-        <div className="max-w-4xl mx-auto">
-          {/* Header */}
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold mb-2">Wallet Management</h1>
-            <p className="text-muted-foreground">
-              Manage your wallet balance and view transaction history
+
+      <main className="mx-auto w-full max-w-7xl px-4 pb-28 pt-5 sm:px-6 md:pb-10 lg:px-8">
+        <PageBreadcrumb items={[{ label: 'Wallet' }]} className="mb-5" />
+
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-black tracking-normal sm:text-4xl">My Wallet</h1>
+            <p className="mt-2 max-w-2xl text-sm text-slate-600 dark:text-slate-400">
+              Manage your balance, payment methods, and transaction history.
             </p>
           </div>
-
-          {/* Wallet Overview Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-            <Card className="bg-gradient-to-br from-primary to-primary/80 text-white">
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center justify-between">
-                  <span>Current Balance</span>
-                  <Wallet className="h-5 w-5" />
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-3xl font-bold mb-1">
-                  ₦{walletBalance.toLocaleString()}
-                </div>
-                <p className="text-white/80 text-sm">
-                  Available for purchases
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center justify-between text-green-600">
-                  <span>Total Top-ups</span>
-                  <ArrowUpRight className="h-5 w-5" />
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold mb-1">
-                  ₦{totalTopups.toLocaleString()}
-                </div>
-                <p className="text-muted-foreground text-sm">
-                  Lifetime deposits
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="flex items-center justify-between text-blue-600">
-                  <span>Total Spent</span>
-                  <ArrowDownRight className="h-5 w-5" />
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold mb-1">
-                  ₦{totalSpent.toLocaleString()}
-                </div>
-                <p className="text-muted-foreground text-sm">
-                  On purchases
-                </p>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Main Content */}
-          <Tabs defaultValue="topup" className="space-y-6">
-            <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="topup">Top Up Wallet</TabsTrigger>
-              <TabsTrigger value="history">Transaction History</TabsTrigger>
-            </TabsList>
-
-            {/* Top-up Tab */}
-            <TabsContent value="topup" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Plus className="h-5 w-5" />
-                    Add Money to Wallet
-                  </CardTitle>
-                  <p className="text-muted-foreground">
-                    Minimum top-up amount is ₦100. Payments are processed securely via Ercas Pay.
-                  </p>
-                </CardHeader>
-                <CardContent className="space-y-6">
-                  <div className="flex flex-col items-center justify-center py-8">
-                    <TopUpWallet onSuccess={() => {
-                      refreshWalletBalance();
-                      loadTransactions(); // Reload transactions after successful payment
-                      toast({
-                        title: "Wallet Updated",
-                        description: "Your wallet balance has been updated successfully!",
-                      });
-                    }} />
-                    <p className="text-sm text-muted-foreground mt-4 text-center">
-                      🔒 Secure payments powered by Ercas Pay<br />
-                      Supports Cards, Bank Transfer, USSD & QR Code
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </TabsContent>
-
-            {/* History Tab */}
-            <TabsContent value="history" className="space-y-6">
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <History className="h-5 w-5" />
-                    Transaction History
-                  </CardTitle>
-                  <p className="text-muted-foreground">
-                    Complete history of all wallet transactions
-                  </p>
-                </CardHeader>
-                <CardContent>
-                  {isLoadingTransactions ? (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="text-muted-foreground">Loading transactions...</div>
-                    </div>
-                  ) : transactions.length === 0 ? (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="text-center">
-                        <History className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                        <p className="text-muted-foreground">No transactions yet</p>
-                        <p className="text-sm text-muted-foreground">Your wallet activity will appear here</p>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {transactions.map((transaction) => (
-                        <div
-                          key={transaction.id}
-                          className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
-                        >
-                          <div className="flex items-center gap-4">
-                            <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center">
-                              {transaction.type === 'topup' ? (
-                                <ArrowUpRight className="h-5 w-5 text-green-600" />
-                              ) : (
-                                <ArrowDownRight className="h-5 w-5 text-red-600" />
-                              )}
-                            </div>
-                            
-                            <div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-medium">
-                                  {transaction.type === 'topup' ? 'Wallet Top-up' : 'Purchase'}
-                                </span>
-                                {getStatusIcon(transaction.status)}
-                              </div>
-                              <p className="text-sm text-muted-foreground">
-                                {transaction.type === 'topup' 
-                                  ? 'Wallet top-up via Ercas Pay' 
-                                  : 'Account purchase'
-                                }
-                              </p>
-                              <div className="flex items-center gap-4 text-xs text-muted-foreground mt-1">
-                                <span className="flex items-center gap-1">
-                                  <Calendar className="h-3 w-3" />
-                                  {new Date(transaction.created_at).toLocaleDateString()}
-                                </span>
-                                <span>Ref: {transaction.reference}</span>
-                                {transaction.ercas_reference && (
-                                  <span>Ercas: {transaction.ercas_reference}</span>
-                                )}
-                              </div>
-                            </div>
-                          </div>
-                          
-                          <div className="text-right">
-                            <div className={`text-lg font-semibold ${
-                              transaction.amount > 0 ? 'text-green-600' : 'text-red-600'
-                            }`}>
-                              {transaction.amount > 0 ? '+' : ''}₦{Math.abs(transaction.amount).toLocaleString()}
-                            </div>
-                            <Badge 
-                              variant={
-                                transaction.status === 'completed' ? 'default' :
-                                transaction.status === 'pending' ? 'secondary' : 'destructive'
-                              }
-                              className="text-xs"
-                            >
-                              {transaction.status}
-                            </Badge>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            </TabsContent>
-          </Tabs>
+          <Button variant="outline" onClick={() => {
+            refreshWalletBalance()
+            loadTransactions()
+          }}>
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
         </div>
-      </div>
+
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_310px]">
+          <section className="space-y-6">
+            <div className="grid gap-4 lg:grid-cols-[1.25fr_0.9fr]">
+              <article className="relative min-h-[170px] overflow-hidden rounded-xl border border-purple-200/70 bg-[radial-gradient(circle_at_82%_48%,rgba(216,180,254,0.22),transparent_15rem),linear-gradient(135deg,#2d145c_0%,#4c1d95_48%,#1b103d_100%)] p-4 text-white shadow-[0_24px_70px_rgba(126,51,231,0.28)] dark:border-purple-300/20 sm:min-h-[190px] sm:p-5">
+                <div className="absolute -right-12 -top-12 h-48 w-48 rounded-full bg-purple-300/20 blur-2xl" />
+                <div className="absolute bottom-0 left-0 h-14 w-full bg-black/10" />
+
+                <div className="pointer-events-none absolute right-2 top-1/2 h-28 w-32 -translate-y-1/2 sm:right-7 sm:h-36 sm:w-40">
+                  <div className="absolute left-8 top-0 h-10 w-16 -rotate-6 rounded-md bg-emerald-100 shadow-lg sm:left-10 sm:h-12 sm:w-20" />
+                  <div className="absolute left-12 top-2 h-10 w-16 rotate-3 rounded-md bg-slate-200 shadow-lg sm:left-14 sm:h-12 sm:w-20" />
+                  <div className="absolute bottom-3 right-6 h-20 w-24 rounded-[1rem] bg-gradient-to-br from-purple-400 via-purple-700 to-violet-950 shadow-[0_16px_35px_rgba(0,0,0,0.35)] ring-1 ring-white/15 sm:h-24 sm:w-32">
+                    <div className="absolute -right-2 top-7 h-10 w-10 rounded-l-xl rounded-r-md bg-purple-500 shadow-lg ring-1 ring-white/15 sm:top-8 sm:h-12 sm:w-12" />
+                    <div className="absolute inset-x-4 top-5 grid place-items-center text-4xl font-black text-white/90 sm:text-5xl">
+                      T
+                    </div>
+                  </div>
+                  <span className="absolute bottom-0 right-2 grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-purple-300 to-purple-700 text-xl font-black text-white shadow-xl ring-2 ring-purple-200/40 sm:h-14 sm:w-14 sm:text-2xl">
+                    {currencySymbol}
+                  </span>
+                </div>
+
+                <div className="relative z-10 max-w-[62%] sm:max-w-[58%]">
+                    <div className="flex items-center gap-2 text-xs font-black text-purple-100 sm:text-sm">
+                      Your Balance
+                      <button
+                        type="button"
+                        onClick={() => {
+                          trackRevenueEvent({
+                            eventType: showBalances ? 'OFFER_DISMISSED' : 'OFFER_ACCEPTED',
+                            userId: user?.id || null,
+                            surface: 'wallet_balance_visibility',
+                            metadata: { next_visible: !showBalances },
+                          })
+                          toggleBalanceVisibility()
+                        }}
+                        className="grid h-7 w-7 place-items-center rounded-full text-purple-100 transition hover:bg-white/10 hover:text-white"
+                        aria-label={showBalances ? 'Hide balances' : 'Show balances'}
+                      >
+                        {showBalances ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+                      </button>
+                    </div>
+                    <div className="mt-3 text-3xl font-black tracking-normal sm:mt-5 sm:text-5xl">
+                      {walletLoading ? (
+                        <span className="inline-block h-9 w-40 rounded-lg bg-white/20 animate-pulse" />
+                      ) : (
+                        walletBalanceDisplay
+                      )}
+                    </div>
+                    <p className="mt-2 text-xs font-bold text-purple-100/85 sm:text-sm">Available Balance</p>
+                    {walletBalanceUnavailable && !walletLoading && (
+                      <button type="button" className="mt-2 text-xs font-bold text-white underline" onClick={() => void refreshWalletBalance()}>
+                        Retry balance check
+                      </button>
+                    )}
+                    <div className="mt-4 max-w-48 sm:mt-5">
+                      <TopUpWallet
+                        onSuccess={handleTopUpSuccess}
+                        triggerClassName="h-10 w-full rounded-lg bg-purple-500 text-sm font-black text-white hover:bg-purple-400 sm:h-11"
+                        triggerChildren={(
+                          <>
+                            Add Funds
+                            <Plus className="h-4 w-4" />
+                          </>
+                        )}
+                      />
+                    </div>
+                </div>
+              </article>
+
+              <div className="grid grid-cols-2 gap-2 sm:gap-3">
+                <TopUpWallet
+                  onSuccess={handleTopUpSuccess}
+                  triggerVariant="outline"
+                  triggerSize="default"
+                  triggerClassName="h-auto min-h-[82px] justify-start rounded-xl border-slate-200 bg-white/85 p-3 text-left shadow-sm hover:bg-white dark:border-white/10 dark:bg-white/[0.035] dark:hover:bg-white/[0.06] sm:min-h-[88px] sm:p-4"
+                  triggerChildren={(
+                    <span className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+                      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-purple-300/40 text-purple-600 dark:text-purple-300 sm:h-11 sm:w-11">
+                        <Plus className="h-4 w-4 sm:h-5 sm:w-5" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <strong className="block text-xs font-black leading-tight text-slate-950 dark:text-white min-[360px]:text-sm">Add Funds</strong>
+                        <small className="mt-1 block text-[10px] font-semibold leading-tight text-slate-500 dark:text-slate-400 min-[360px]:text-xs">Fund your wallet</small>
+                      </span>
+                    </span>
+                  )}
+                />
+
+                <Link
+                  to="/support"
+                  onClick={() => handleWalletSupportClick('wallet_withdraw_shortcut')}
+                  className="flex min-h-[82px] min-w-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-white/85 p-3 shadow-sm transition hover:bg-white dark:border-white/10 dark:bg-white/[0.035] dark:hover:bg-white/[0.06] sm:min-h-[88px] sm:gap-3 sm:p-4"
+                >
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-purple-300/40 text-purple-600 dark:text-purple-300 sm:h-11 sm:w-11">
+                    <ArrowUpRight className="h-4 w-4 sm:h-5 sm:w-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="block text-xs font-black leading-tight text-slate-950 dark:text-white min-[360px]:text-sm">Withdraw</strong>
+                    <small className="mt-1 block text-[10px] font-semibold leading-tight text-slate-500 dark:text-slate-400 min-[360px]:text-xs">Request support</small>
+                  </span>
+                </Link>
+
+                <Link
+                  to="/support"
+                  onClick={() => handleWalletSupportClick('wallet_transfer_shortcut')}
+                  className="flex min-h-[82px] min-w-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-white/85 p-3 shadow-sm transition hover:bg-white dark:border-white/10 dark:bg-white/[0.035] dark:hover:bg-white/[0.06] sm:min-h-[88px] sm:gap-3 sm:p-4"
+                >
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-purple-300/40 text-purple-600 dark:text-purple-300 sm:h-11 sm:w-11">
+                    <Send className="h-4 w-4 sm:h-5 sm:w-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="block text-xs font-black leading-tight text-slate-950 dark:text-white min-[360px]:text-sm">Transfer</strong>
+                    <small className="mt-1 block text-[10px] font-semibold leading-tight text-slate-500 dark:text-slate-400 min-[360px]:text-xs">Ask support</small>
+                  </span>
+                </Link>
+
+                <Link
+                  to="/profile"
+                  className="flex min-h-[82px] min-w-0 items-center gap-2.5 rounded-xl border border-slate-200 bg-white/85 p-3 shadow-sm transition hover:bg-white dark:border-white/10 dark:bg-white/[0.035] dark:hover:bg-white/[0.06] sm:min-h-[88px] sm:gap-3 sm:p-4"
+                >
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-purple-300/40 text-purple-600 dark:text-purple-300 sm:h-11 sm:w-11">
+                    <CreditCard className="h-4 w-4 sm:h-5 sm:w-5" />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <strong className="block text-xs font-black leading-tight text-slate-950 dark:text-white min-[360px]:text-sm">Payment Methods</strong>
+                    <small className="mt-1 block text-[10px] font-semibold leading-tight text-slate-500 dark:text-slate-400 min-[360px]:text-xs">Manage account</small>
+                  </span>
+                </Link>
+              </div>
+            </div>
+
+            <Link to="/crypto-exchange" className="flex items-center gap-3 rounded-2xl border border-teal-200 bg-teal-50 p-4 transition hover:bg-teal-100 dark:border-teal-800 dark:bg-teal-950/30 dark:hover:bg-teal-950/50">
+              <span className="grid h-10 w-10 place-items-center rounded-xl bg-teal-600 text-white"><Bitcoin className="h-5 w-5" /></span>
+              <span><strong className="block text-sm">Pay with crypto</strong><span className="text-xs text-muted-foreground">Choose a coin and network to fund your wallet.</span></span>
+            </Link>
+
+            {recordedBalanceNeedsReview && (
+              <div role="status" className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 dark:border-amber-500/40 dark:bg-amber-950/20 dark:text-amber-100">
+                <p className="font-bold">Recorded wallet amount needs funding review</p>
+                <p className="mt-2">
+                  An older amount recorded in your wallet is not yet available for purchases because its funding cannot be confirmed from our records. Your account is not suspended. If you paid, or an admin topped up your wallet earlier, send support the date, amount, and payment receipt or reference.
+                </p>
+                <Link to="/support" onClick={() => handleWalletSupportClick('wallet_recorded_funding_review')} className="mt-3 inline-block font-bold underline">
+                  Contact support
+                </Link>
+              </div>
+            )}
+
+            <PaymentVerificationCard />
+
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="grid min-w-0 grid-cols-4 items-center gap-1">
+                {walletTabs.map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => handleWalletTabChange(value)}
+                    className={`relative min-w-0 px-1 py-2.5 text-center text-[11px] font-black leading-tight transition min-[360px]:text-xs sm:px-3 sm:text-sm ${
+                      activeTab === value
+                        ? 'text-purple-700 dark:text-purple-300'
+                        : 'text-slate-500 hover:text-slate-950 dark:text-slate-400 dark:hover:text-white'
+                    }`}
+                  >
+                    {label}
+                    {activeTab === value && (
+                      <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-purple-600 dark:bg-purple-400" />
+                    )}
+                  </button>
+                ))}
+              </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm">
+                    <Filter className="h-4 w-4" />
+                    Filter
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleDownload} disabled={transactions.length === 0}>
+                    <Download className="h-4 w-4" />
+                    Download
+                  </Button>
+                </div>
+            </div>
+
+            <article className="overflow-hidden rounded-xl border border-slate-200 bg-white/85 shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
+              <div className="hidden overflow-x-auto md:block">
+                <table className="w-full text-left text-sm">
+                  <thead className="border-b border-slate-200 text-xs uppercase text-slate-500 dark:border-white/10 dark:text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3 font-black">Transaction</th>
+                      <th className="px-4 py-3 font-black">Type</th>
+                      <th className="px-4 py-3 font-black">Amount</th>
+                      <th className="px-4 py-3 font-black">Status</th>
+                      <th className="px-4 py-3 font-black">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {isLoadingTransactions ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
+                          Loading transactions...
+                        </td>
+                      </tr>
+                    ) : filteredTransactions.length === 0 ? (
+                      <tr>
+                        <td colSpan={5} className="px-4 py-12 text-center text-slate-500 dark:text-slate-400">
+                          No wallet transactions found.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredTransactions.slice(0, 12).map((transaction) => {
+                        const kind = classifyWalletTransaction(transaction)
+                        const isEvidenceOnly = isBalanceNeutralLedgerEvidence(transaction)
+                        const signedAmount = getTransactionSignedAmount(transaction)
+                        const amount = Math.abs(signedAmount)
+                        const isCredit = signedAmount > 0
+                        return (
+                          <tr key={transaction.id} className="border-b border-slate-200/70 last:border-b-0 dark:border-white/10">
+                            <td className="px-4 py-4">
+                              <div className="flex items-center gap-3">
+                                <span className="grid h-10 w-10 place-items-center rounded-lg bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300">
+                                  {isEvidenceOnly ? <Receipt className="h-4 w-4" /> : isCredit ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+                                </span>
+                                <span>
+                                  <strong className="block text-slate-950 dark:text-white">{getWalletTransactionTitle(transaction)}</strong>
+                                  {isEvidenceOnly && <small className="mt-1 block text-slate-500 dark:text-slate-400">No wallet balance change</small>}
+                                  <small className="mt-1 block text-slate-500 dark:text-slate-400">
+                                    Ref: {transaction.reference || transaction.ercas_reference || String(transaction.id).slice(0, 10)}
+                                  </small>
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-4">
+                              <Badge variant="outline" className="capitalize">{isEvidenceOnly ? 'evidence' : kind}</Badge>
+                            </td>
+                            <td className={`px-4 py-4 font-black ${isEvidenceOnly ? 'text-slate-500 dark:text-slate-400' : isCredit ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                              {isEvidenceOnly ? '' : isCredit ? '+' : '-'}{formatPrice(amount)}
+                            </td>
+                            <td className="px-4 py-4">
+                              <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-black capitalize ${getStatusBadgeClass(String(transaction.status).toLowerCase())}`}>
+                                {getStatusIcon(String(transaction.status).toLowerCase())}
+                                {transaction.status || 'unknown'}
+                              </span>
+                            </td>
+                            <td className="px-4 py-4 text-slate-600 dark:text-slate-400">
+                              {formatDateTime(transaction.created_at)}
+                            </td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="grid gap-3 p-4 md:hidden">
+                {isLoadingTransactions ? (
+                  <div className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">Loading transactions...</div>
+                ) : filteredTransactions.length === 0 ? (
+                  <div className="py-8 text-center text-sm text-slate-500 dark:text-slate-400">No wallet transactions found.</div>
+                ) : (
+                  filteredTransactions.slice(0, 8).map((transaction) => {
+                    const kind = classifyWalletTransaction(transaction)
+                    const isEvidenceOnly = isBalanceNeutralLedgerEvidence(transaction)
+                    const signedAmount = getTransactionSignedAmount(transaction)
+                    const amount = Math.abs(signedAmount)
+                    const isCredit = signedAmount > 0
+                    return (
+                      <div key={transaction.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-white/10 dark:bg-white/[0.035]">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex items-start gap-3">
+                            <span className="grid h-10 w-10 place-items-center rounded-lg bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300">
+                              {isEvidenceOnly ? <Receipt className="h-4 w-4" /> : isCredit ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+                            </span>
+                            <div>
+                              <strong className="block text-sm">{getWalletTransactionTitle(transaction)}</strong>
+                              {isEvidenceOnly && <span className="mt-1 block text-xs text-slate-500 dark:text-slate-400">No wallet balance change</span>}
+                              <span className="mt-1 flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400">
+                                <Calendar className="h-3 w-3" />
+                                {formatDateTime(transaction.created_at)}
+                              </span>
+                            </div>
+                          </div>
+                          <span className={`text-sm font-black ${isEvidenceOnly ? 'text-slate-500 dark:text-slate-400' : isCredit ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400'}`}>
+                            {isEvidenceOnly ? '' : isCredit ? '+' : '-'}{formatPrice(amount)}
+                          </span>
+                        </div>
+                        <div className="mt-3 flex items-center justify-between gap-2">
+                          <Badge variant="outline" className="capitalize">{isEvidenceOnly ? 'evidence' : kind}</Badge>
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-black capitalize ${getStatusBadgeClass(String(transaction.status).toLowerCase())}`}>
+                            {getStatusIcon(String(transaction.status).toLowerCase())}
+                            {transaction.status || 'unknown'}
+                          </span>
+                        </div>
+                      </div>
+                    )
+                  })
+                )}
+              </div>
+            </article>
+          </section>
+
+          <aside className="space-y-5">
+            <article className="rounded-xl border border-slate-200 bg-white/85 p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
+              <h2 className="text-lg font-black">Wallet Overview</h2>
+              <div className="mt-5 space-y-4 text-sm">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-white/10">
+                  <span className="text-slate-600 dark:text-slate-400">Available Balance</span>
+                  <strong className="text-purple-600 dark:text-purple-300">{walletLoading ? '...' : walletBalanceDisplay}</strong>
+                </div>
+                <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-white/10">
+                  <span className="text-slate-600 dark:text-slate-400">Pending Balance</span>
+                  <strong className="text-amber-600 dark:text-amber-400">{pendingBalanceDisplay}</strong>
+                </div>
+                <div className="flex items-center justify-between border-b border-slate-200 pb-3 dark:border-white/10">
+                  <span className="text-slate-600 dark:text-slate-400">Total Deposits</span>
+                  <strong className="text-emerald-600 dark:text-emerald-400">{totalTopupsDisplay}</strong>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-slate-600 dark:text-slate-400">Total Spent</span>
+                  <strong className="text-red-600 dark:text-red-400">{totalSpentDisplay}</strong>
+                </div>
+              </div>
+            </article>
+
+            <article className="rounded-xl border border-slate-200 bg-white/85 p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
+              <h2 className="text-lg font-black">Quick Top Up</h2>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                {quickAmounts.map((amount) => (
+                  <TopUpWallet
+                    key={amount}
+                    initialAmount={amount}
+                    onSuccess={handleTopUpSuccess}
+                    triggerVariant="outline"
+                    triggerSize="sm"
+                    triggerClassName="h-11 rounded-lg border-slate-200 bg-slate-50 text-xs font-black hover:bg-white dark:border-white/10 dark:bg-white/[0.035] dark:hover:bg-white/[0.08]"
+                    triggerChildren={formatPrice(amount)}
+                  />
+                ))}
+              </div>
+              <div className="mt-3">
+                <TopUpWallet
+                  onSuccess={handleTopUpSuccess}
+                  triggerClassName="h-11 w-full rounded-lg bg-gradient-to-r from-purple-500 to-violet-700 text-white shadow-lg hover:from-purple-400 hover:to-violet-600"
+                  triggerChildren="Top Up Now"
+                />
+              </div>
+            </article>
+
+            <article className="rounded-xl border border-slate-200 bg-white/85 p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
+              <div className="flex items-start gap-4">
+                <span className="grid h-12 w-12 place-items-center rounded-xl bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300">
+                  <Headphones className="h-6 w-6" />
+                </span>
+                <div>
+                  <h2 className="text-lg font-black">Need Help?</h2>
+                  <p className="mt-2 text-sm leading-6 text-slate-600 dark:text-slate-400">
+                    Our support team can help with funding delays, transfers, and payment checks.
+                  </p>
+                </div>
+              </div>
+              <Link
+                to="/support"
+                onClick={() => handleWalletSupportClick('wallet_need_help_card')}
+                className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-slate-200 text-sm font-black text-purple-700 transition hover:bg-purple-50 dark:border-white/10 dark:text-purple-300 dark:hover:bg-white/[0.06]"
+              >
+                Contact Support
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
+            </article>
+
+            <article className="rounded-xl border border-slate-200 bg-white/85 p-5 shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
+              <div className="grid gap-3 text-sm">
+                <div className="flex items-center gap-3">
+                  <Landmark className="h-5 w-5 text-purple-600 dark:text-purple-300" />
+                  <span>Bank transfer top-ups credit automatically.</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <ShieldCheck className="h-5 w-5 text-purple-600 dark:text-purple-300" />
+                  <span>Payments are checked against gateway records.</span>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Receipt className="h-5 w-5 text-purple-600 dark:text-purple-300" />
+                  <span>Every wallet movement stays in your history.</span>
+                </div>
+              </div>
+            </article>
+          </aside>
+        </div>
+      {recs.length > 0 && (
+        <div className="mx-auto max-w-2xl px-4 pb-8">
+          <RecommendationStrip products={recs} surface="wallet_page" actionType="SHOW_ALTERNATIVE" userId={user?.id} title="Ready to buy something?" />
+        </div>
+      )}
+
+      </main>
 
       <Footer />
     </div>

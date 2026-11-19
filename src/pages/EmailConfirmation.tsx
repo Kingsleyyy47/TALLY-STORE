@@ -4,16 +4,29 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { CheckCircle, XCircle, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import Navbar from '@/components/Navbar'
+import Navbar from '@/components/NavbarAuth'
 import Footer from '@/components/Footer'
+import { useSupportSettings } from '@/hooks/useSupportSettings'
+import { trackRevenueEvent } from '@/lib/revenue-os'
 
 export default function EmailConfirmation() {
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading')
   const [message, setMessage] = useState('')
+  const support = useSupportSettings()
+  const supportUrl = support.whatsappUrl || support.telegramUrl || ''
 
   useEffect(() => {
+    trackRevenueEvent({
+      eventType: 'PAGE_VIEWED',
+      surface: 'email_confirmation',
+      metadata: {
+        has_token_hash: Boolean(searchParams.get('token_hash')),
+        type: searchParams.get('type') || null,
+      },
+    })
+
     const handleEmailConfirmation = async () => {
       try {
         // Get the tokens from URL
@@ -22,6 +35,10 @@ export default function EmailConfirmation() {
 
         if (!token_hash || type !== 'email') {
           // Since accounts are working, show success by default for email confirmation attempts
+          trackRevenueEvent({
+            eventType: 'OFFER_ACCEPTED',
+            surface: 'email_confirmation_no_token_success',
+          })
           setStatus('success')
           setMessage('Your email has been confirmed successfully! You can now log in to your account.')
           return
@@ -36,20 +53,46 @@ export default function EmailConfirmation() {
         if (error) {
           console.error('Email confirmation error:', error)
           // Since accounts are working, show success even if there's a verification error
+          trackRevenueEvent({
+            eventType: 'OFFER_ACCEPTED',
+            surface: 'email_confirmation_supabase_fallback_success',
+            metadata: { reason: error.message || 'verify_otp_error' },
+          })
           setStatus('success')
           setMessage('Your email has been confirmed successfully! You can now log in to your account.')
           return
         }
 
         if (data.user) {
+          const referralCode = typeof data.user.user_metadata?.referral_code_input === 'string'
+            ? data.user.user_metadata.referral_code_input
+            : ''
+          await supabase.functions.invoke('apply-referral', {
+            body: { referralCode },
+          }).catch((err) => console.error('apply-referral invoke failed:', err))
+          trackRevenueEvent({
+            eventType: 'OFFER_ACCEPTED',
+            userId: data.user.id,
+            surface: 'email_confirmation_success',
+            metadata: { has_referral_code: Boolean(referralCode) },
+          })
           setStatus('success')
           setMessage('Your email has been confirmed successfully! You can now log in to your account.')
         } else {
+          trackRevenueEvent({
+            eventType: 'OFFER_DISMISSED',
+            surface: 'email_confirmation_missing_user',
+          })
           setStatus('error')
           setMessage('Unable to confirm email. Please try again or contact support.')
         }
       } catch (error) {
         console.error('Confirmation process error:', error)
+        trackRevenueEvent({
+          eventType: 'OFFER_DISMISSED',
+          surface: 'email_confirmation_error',
+          metadata: { reason: error instanceof Error ? error.message : 'unexpected_error' },
+        })
         setStatus('error')
         setMessage('An unexpected error occurred. Please try again or contact support.')
       }
@@ -59,6 +102,14 @@ export default function EmailConfirmation() {
   }, [searchParams])
 
   const handleContinue = () => {
+    trackRevenueEvent({
+      eventType: 'OFFER_ACCEPTED',
+      surface: 'email_confirmation_continue',
+      metadata: {
+        status,
+        destination: status === 'success' ? '/login' : '/',
+      },
+    })
     if (status === 'success') {
       navigate('/login', { 
         state: { 
@@ -71,12 +122,12 @@ export default function EmailConfirmation() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
+    <div className="min-h-screen bg-background">
       <Navbar />
       
-      <div className="container mx-auto px-4 py-16">
-        <div className="max-w-md mx-auto">
-          <Card>
+      <main className="mx-auto max-w-md px-4 pb-16 pt-8">
+        <div>
+          <Card className="rounded-2xl border-slate-200 bg-white/85 shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
             <CardHeader className="text-center">
               <CardTitle className="text-2xl font-bold">
                 Email Confirmation
@@ -122,7 +173,7 @@ export default function EmailConfirmation() {
                     </p>
                     <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
                       <p className="text-sm text-red-700 dark:text-red-300">
-                        Need help? Contact our support team via WhatsApp for assistance.
+                        Need help? Contact our support team on WhatsApp for assistance.
                       </p>
                     </div>
                   </>
@@ -137,21 +188,24 @@ export default function EmailConfirmation() {
                 {status === 'success' ? 'Continue to Login' : 'Go to Homepage'}
               </Button>
 
-              {status === 'error' && (
+              {status === 'error' && supportUrl && (
                 <div className="text-center">
-                  <Button
-                    variant="outline"
-                    onClick={() => window.open('https://wa.me/2348123456789', '_blank')}
-                    className="w-full"
-                  >
-                    Contact Support via WhatsApp
+                  <Button asChild variant="outline" className="w-full">
+                    <a
+                      href={supportUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => trackRevenueEvent({ eventType: 'SUPPORT_HANDOFF', surface: 'email_confirmation_support_link' })}
+                    >
+                      Contact Support
+                    </a>
                   </Button>
                 </div>
               )}
             </CardContent>
           </Card>
         </div>
-      </div>
+      </main>
 
       <Footer />
     </div>

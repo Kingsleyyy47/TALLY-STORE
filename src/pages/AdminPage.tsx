@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react'
+import ProviderIntegrations from '@/components/ProviderIntegrations'
+import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -6,25 +7,62 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { 
-  Settings, 
-  Plus, 
-  Upload, 
-  Users, 
-  ShoppingBag, 
-  TrendingUp, 
-  Edit, 
+import {
+  Settings,
+  Plus,
+  Upload,
+  Users,
+  ShoppingBag,
+  TrendingUp,
+  Edit,
   Trash2,
   Eye,
   DollarSign,
-  Loader2
+  Loader2,
+  Search,
+  Download,
+  AlertTriangle,
+  Mail,
+  Send,
+  XCircle,
+  RefreshCw,
+  CheckCircle2,
+  Clock,
+  ChevronDown,
+  X,
+  Tag,
+  Shield,
+  UserCheck,
+  UserX,
+  ToggleLeft,
+  ToggleRight,
+  Star,
+  PhoneCall,
+  History,
+  Smartphone,
+  Bitcoin,
+  Gift,
+  Megaphone,
+  WalletCards,
+  Target,
+  BarChart3,
+  UserPlus,
+  MousePointerClick,
+  Sparkles,
 } from 'lucide-react'
+import { PERMISSIONS, type PermissionKey } from '@/lib/staffPermissions'
+import { isBalanceNeutralLedgerEvidence } from '@/lib/walletTransactions'
 import Navbar from '@/components/NavbarAuth'
 import Footer from '@/components/Footer'
+import AdminAlerts from '@/components/AdminAlerts'
+import PocketfiPaymentChecker from '@/components/admin/PocketfiPaymentChecker'
+import PartnerReconciliationPanel from '@/components/PartnerReconciliationPanel'
+import BitrefillPricingAdmin from '@/components/BitrefillPricingAdmin'
 import { 
   getCategories, 
-  getAllProductGroups, 
-  getIndividualAccounts,
+  getManagedProductGroups,
+  getIndividualAccountsPage,
+  getIndividualAccountsCount,
   createCategory, 
   updateCategory, 
   deleteCategory,
@@ -40,36 +78,936 @@ import {
   getAdminSalesStats,
   bulkCreateIndividualAccounts,
   parseCSV,
+  detectAccountImportMode,
+  SITE_FORMATS,
   createProductTemplate,
   processBulkAccountUpload,
-  type Category, 
+  getAllUsers,
+  searchUsers,
+  getCustomerBalancePage,
+  type CustomerBalanceRow,
+  type CustomerBalanceSort,
+  getUserTransactions,
+  getUserOrdersAdmin,
+  getAdminWalletFinancialTruth,
+  getAdminWalletFinancialTruthPage,
+  getAdminCrossWalletPaymentConflictsPage,
+  getAdminFraudLatestVisits,
+  type AdminWalletFinancialTruth,
+  type AdminWalletFinancialTruthPageRow,
+  adminAdjustBalance,
+  adminRecordLedgerCredit,
+  adminRecoverErcasPayment,
+  adminRecordChargeback,
+  adminSuspendUser,
+  adminUnsuspendUser,
+  getAppSetting,
+  upsertAppSetting,
+  getFavoriteProductGroupIds,
+  setFavoriteProductGroupIds as saveFavoriteProductGroupIds,
+  getProductSuggestions,
+  computeAndUpsertTrendSuggestions,
+  dismissSuggestion,
+  acceptSuggestion,
+  manualRestock,
+  getDiscountCodes,
+  createDiscountCode,
+  setDiscountCodeActive,
+  type Category,
   type ProductGroup,
   type IndividualAccount,
-  type ProductTemplate
+  type ProductTemplate,
+  type ProductSuggestion,
+  type DiscountCode,
+  supabase
 } from '@/lib/supabase'
+import { format, formatDistanceToNow } from 'date-fns'
+import { useAuth } from '@/contexts/SimpleAuth'
+import { useToast } from '@/hooks/use-toast'
+import { readEmailFunctionError } from '@/lib/emailFunctionError'
+import { cn } from '@/lib/utils'
+import {
+  analyzePromotionGuardrails,
+  analyzeRevenueDataQuality,
+  analyzeRevenueEventDataQuality,
+  applyCroEvaluationDecisions,
+  createProductRankingExperimentFromOpportunity,
+  decayCommercialInsights,
+  deriveBehavioralProductRelationships,
+  deriveCroActionPlans,
+  deriveCroBanditAllocations,
+  deriveCroDriftChecks,
+  deriveCroExperimentEvaluations,
+  deriveCroSimulationRun,
+  deriveRevenueAnomalyChecks,
+  deriveRevenueProductAttributes,
+  deriveRevenueOsRuntimeIntelligence,
+  deriveCatalogueProductRelationships,
+  recordCroExperiment,
+  recordCroEvaluations,
+  recordCroActionPlans,
+  recordCatalogueProductRelationships,
+  recordRevenueProductAttributes,
+  recordRevenueDataQualityFindings,
+  recordRevenueOsRuntimeIntelligence,
+  seedDeterministicRevenueOsModelRegistry,
+  updateCroActionPlanStatus,
+} from '@/lib/revenue-os'
 
-// Mock admin stats
-const mockStats = {
-  totalUsers: 1247,
-  totalProducts: 89,
-  totalSales: 45,
-  revenue: 285000,
-  pendingOrders: 3,
-  lowStock: 12
+const ADMIN_TABS = [
+  { value: 'templates', label: 'Templates' },
+  { value: 'sms-products', label: 'SMS Products' },
+  { value: 'international-airtime', label: 'International Airtime' },
+  { value: 'gift-card-pricing', label: 'Gift Card Pricing' },
+  { value: 'sms-orders', label: 'SMS Orders' },
+  { value: 'telegram-stars', label: 'Telegram Stars' },
+  { value: 'products', label: 'Products' },
+  { value: 'add-product', label: 'Add Product' },
+  { value: 'bulk-upload', label: 'Bulk Upload' },
+  { value: 'discount-codes', label: 'Discount Codes' },
+  { value: 'categories', label: 'Categories' },
+  { value: 'users', label: 'Users' },
+  { value: 'balance', label: 'Balance' },
+  { value: 'fraud', label: 'Wallet Review' },
+  { value: 'sales', label: 'Sales' },
+  { value: 'histories', label: 'Transactions' },
+  { value: 'pocketfi-payments', label: 'PocketFi Payments' },
+  { value: 'email', label: 'Email' },
+  { value: 'api-partners', label: 'API Partners' },
+  { value: 'staff', label: 'Staff Roles' },
+] as const
+
+type AdminTabValue = (typeof ADMIN_TABS)[number]['value']
+
+const MAX_ADMIN_IMPORT_ROWS = 5_000
+
+type AdminImportSummary = {
+  sourceRows: number
+  parsedRows: number
+  validRows: number
+  invalidRows: number
+  duplicateRows: number
+  preview: Array<{ sampleNumber: number; hasLogin: boolean; hasPassword: boolean; hasEmail: boolean }>
+}
+type AdminImportReview = {
+  nonEmptyRows: number
+  formatLabel: string
+  requiresCsvHeader: boolean
+  likelyHeader: boolean
+  withHeader: AdminImportSummary
+  withoutHeader: AdminImportSummary
+}
+
+function getAdminImportLines(text: string): string[] {
+  return text.replace(/^\uFEFF/, '').split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+}
+
+function analyzeAdminImport(text: string, formatKey?: string): AdminImportReview {
+  const lines = getAdminImportLines(text)
+  const firstLine = lines[0] || ''
+  const mode = detectAccountImportMode(firstLine, formatKey)
+  const requiresCsvHeader = mode === 'csv'
+  const formatLabel = formatKey
+    ? `${SITE_FORMATS[formatKey]?.label || 'Selected'} format`
+    : mode === 'csv' ? 'Comma-separated CSV' : mode === 'pipe' ? 'Pipe-separated text' : mode === 'colon' ? 'Colon-separated text' : 'Unrecognized text'
+  const headerWords = new Set(['username', 'user', 'login', 'email', 'mail', 'password', 'pass', 'emailpassword', 'mailpassword', 'twofa', 'year'])
+  const firstColumns = firstLine.split(/[,:|\t]/).map(value => value.toLowerCase().replace(/[^a-z0-9]/g, ''))
+  const likelyHeader = firstColumns.length > 1 && firstColumns.filter(value => headerWords.has(value)).length >= 2
+
+  const summarize = (skipHeader: boolean): AdminImportSummary => {
+    const dataLines = skipHeader || requiresCsvHeader ? lines.slice(1) : lines
+    if (lines.length > MAX_ADMIN_IMPORT_ROWS + 1) {
+      return { sourceRows: dataLines.length, parsedRows: 0, validRows: 0, invalidRows: 0, duplicateRows: 0, preview: [] }
+    }
+    const input = skipHeader && !requiresCsvHeader ? dataLines.join('\n') : lines.join('\n')
+    const parsed = parseCSV(input, formatKey) as Array<Record<string, unknown>>
+    const validRows = parsed.filter(row => Boolean(row?.password && (row?.username || row?.email))).length
+    return {
+      sourceRows: dataLines.length,
+      parsedRows: parsed.length,
+      validRows,
+      // Explicit-format parsing can silently drop malformed lines; include them in this count.
+      invalidRows: dataLines.length - validRows,
+      duplicateRows: dataLines.length - new Set(dataLines).size,
+      // Only field presence is retained for the UI. No credential value enters preview state.
+      preview: parsed.slice(0, 3).map((row, index) => ({
+        sampleNumber: index + 1,
+        hasLogin: Boolean(row?.username || row?.email),
+        hasPassword: Boolean(row?.password),
+        hasEmail: Boolean(row?.email),
+      })),
+    }
+  }
+
+  return {
+    nonEmptyRows: lines.length,
+    formatLabel,
+    requiresCsvHeader,
+    likelyHeader,
+    withHeader: summarize(true),
+    withoutHeader: summarize(false),
+  }
+}
+
+const PARTNER_API_INCIDENT_PAUSED = true
+const PARTNER_SECTIONS = [
+  { key: 'products', label: 'Products' },
+  { key: 'sms', label: 'SMS' },
+  { key: 'social_boost', label: 'Social Boost' },
+  { key: 'bills_airtime', label: 'Bills & Airtime' },
+  { key: 'giftcards', label: 'Gift Cards' },
+  { key: 'crypto', label: 'Crypto' },
+  { key: 'telegram_stars', label: 'Telegram' },
+] as const
+const PARTNER_SCOPES = ['catalogue:read', 'orders:create', 'orders:read', 'wallet:read'] as const
+
+const EXPLICIT_PRODUCT_RELATIONSHIP_TYPES = [
+  'COMPATIBLE_WITH',
+  'REPLACEMENT_FOR',
+  'REQUIRES',
+  'COMPLEMENT',
+  'SUBSTITUTE',
+  'ALTERNATIVE',
+  'VARIANT',
+  'UPGRADE',
+  'DOWNGRADE',
+] as const
+
+type ExplicitProductRelationshipType = (typeof EXPLICIT_PRODUCT_RELATIONSHIP_TYPES)[number]
+import { clearExchangeRateCache } from '@/hooks/useExchangeRate'
+import { 
+  Table, 
+  TableBody, 
+  TableCell, 
+  TableHead, 
+  TableHeader, 
+  TableRow 
+} from '@/components/ui/table'
+import { 
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { Checkbox } from '@/components/ui/checkbox'
+
+type AdminSmsProduct = {
+  service_id: string
+  service_code: string
+  service_name: string
+  provider_cost_usd: number
+  provider_cost_ngn: number
+  margin_ngn: number
+  exchange_rate: number
+  price_ngn: number
+  available_count: number
+  customer_buy_count?: number
+  recommended_score?: number
+  is_enabled: boolean
+  is_favorite: boolean
+  price_override_ngn: number | null
+  auto_markup_enabled: boolean
+  pricing_mode: 'auto_markup' | 'manual_margin' | 'override'
+}
+
+type AdminSmsDiagnostics = {
+  provider_host?: string
+  provider_base_configured?: boolean
+  configured?: boolean
+  country_id?: number
+  verification_ok?: boolean
+  verification_services?: number
+  verification_country_services?: number
+  prices_ok?: boolean
+  prices_services?: number
+  prices_country_services?: number
+  selected_source?: string
+}
+
+type AdminSmsCatalogResponse = {
+  success: boolean
+  data?: AdminSmsProduct[]
+  error?: string
+  configured?: boolean
+  diagnostics?: AdminSmsDiagnostics | null
+  global_margin_ngn?: number
+  exchange_rate?: number
+  exchange_rate_source?: 'override' | 'live' | 'unavailable' | 'unknown'
+  round_to_nearest_10?: boolean
+}
+
+type ApiPartner = {
+  id: string
+  name: string
+  contact_email?: string | null
+  is_active: boolean
+  allowed_sections: string[]
+  markup_percent: number
+  balance_ngn: number
+  unlimited_credit: boolean
+  owner_reviewed_at?: string | null
+  webhook_url?: string | null
+  notes?: string | null
+  has_webhook_secret?: boolean
+  created_at: string
+  api_partner_keys?: ApiPartnerKey[]
+}
+
+type ApiPartnerEditDraft = {
+  name: string
+  webhook_url: string
+  allowed_sections: string[]
+}
+
+type ApiPartnerKey = {
+  id: string
+  key_name: string
+  key_prefix: string
+  scopes: string[]
+  revoked_at?: string | null
+  last_used_at?: string | null
+  created_at: string
+}
+
+type ApiPartnerOrder = {
+  id: string
+  partner_id: string
+  partner_reference?: string | null
+  item_type: string
+  item_name?: string | null
+  quantity: number
+  amount_ngn: number
+  status: string
+  payment_provider?: string | null
+  payment_transaction_reference?: string | null
+  payment_account_number?: string | null
+  paid_at?: string | null
+  error_message?: string | null
+  created_at: string
+}
+
+type ApiPartnerLog = {
+  id: string
+  partner_id?: string | null
+  action?: string | null
+  status_code?: number | null
+  success: boolean
+  error_message?: string | null
+  created_at: string
+}
+
+type ApiPartnerWebhookDelivery = {
+  id: string
+  partner_id: string
+  order_id?: string | null
+  event_type: string
+  target_url: string
+  status: string
+  status_code?: number | null
+  error_message?: string | null
+  created_at: string
+}
+
+type ApiPartnersResponse = {
+  success: boolean
+  error?: string
+  data?: {
+    partners: ApiPartner[]
+    orders: ApiPartnerOrder[]
+    logs: ApiPartnerLog[]
+    webhooks?: ApiPartnerWebhookDelivery[]
+  }
+}
+
+type AdminDepositTransaction = {
+  id: string
+  user_id: string
+  type: string
+  amount: number
+  status?: string | null
+  reference?: string | null
+  ercas_reference?: string | null
+  balance_after?: number | null
+  description?: string | null
+  created_at: string
+  user_email?: string | null
+  user_name?: string | null
+}
+
+type AdminHistoryKind = 'all' | 'deposits' | 'products' | 'sms' | 'crypto' | 'bills' | 'giftcards' | 'social'
+
+type AdminHistoryRow = {
+  id: string
+  kind: Exclude<AdminHistoryKind, 'all'>
+  date: string
+  user_id?: string | null
+  user_email?: string | null
+  user_name?: string | null
+  user_is_staff?: boolean | null
+  user_is_admin?: boolean | null
+  title: string
+  subtitle?: string | null
+  amount?: number | null
+  status?: string | null
+  reference?: string | null
+  source: string
+  detail?: string | null
+  raw?: Record<string, any>
+}
+
+type EmailedDormantCustomer = {
+  userId: string
+  email: string
+  markedAt: string
+  lastActivityAt?: string | null
+  spentBeforeEmail?: number
+}
+
+type FraudReviewRow = {
+  userId: string
+  role: 'customer' | 'staff' | 'admin'
+  truth: AdminWalletFinancialTruth
+  email: string
+  fullName?: string | null
+  walletBalance: number
+  suspended: boolean
+  walletReviewRequired: boolean
+  walletReviewReason?: string | null
+  suspensionReason?: string | null
+  suspendedAt?: string | null
+  trustedCredits: number
+  completedSpend: number
+  completedRefunds: number
+  eligibleRefunds: number
+  trustedAvailable: number
+  netSpend: number
+  exposure: number
+  spendRatio: number | null
+  duplicateTopupReferences: string[]
+  lastIpAddress?: string | null
+  lastIpSeenAt?: string | null
+  ipAddresses: string[]
+  lastIpLocation?: string | null
+  lastIpIsp?: string | null
+  lastUserAgent?: string | null
+  deviceLabel?: string | null
+  deviceType?: string | null
+  deviceOs?: string | null
+  deviceBrowser?: string | null
+  reviewType: 'review_unblock' | 'suspended_risk' | 'overspent' | 'quarantined_excess' | 'duplicate_deposit' | 'watchlist' | 'historical_funding'
+  reason: string
+}
+
+const DORMANT_EMAIL_SETTING_KEY = 'sales_dormant_customer_email_cohort'
+const ADMIN_TIME_ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || 'local time'
+const SMS_ORDER_HISTORY_COLUMNS = 'id,user_id,reference,order_type,service_id,service_name,phone_number,country_code,price_ngn,status,messages,created_at,completed_at,cancelled_at,refunded_at,refund_amount_ngn'
+
+function parseAdminDate(value?: string | null): Date | null {
+  if (!value) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
+}
+
+function formatAdminAbsoluteDateTime(value?: string | null): string {
+  const parsed = parseAdminDate(value)
+  if (!parsed) return 'Unknown'
+  return `${format(parsed, 'PP p')} (${ADMIN_TIME_ZONE})`
+}
+
+function formatAdminDateWithRelative(value?: string | null): string {
+  const parsed = parseAdminDate(value)
+  if (!parsed) return 'Unknown'
+  return `${formatAdminAbsoluteDateTime(value)} · ${formatDistanceToNow(parsed, { addSuffix: true })}`
+}
+
+function isDepositTransaction(tx: { type?: string | null; amount?: number | null }) {
+  const type = String(tx.type || '').toLowerCase()
+  const amount = Number(tx.amount || 0)
+  if (amount <= 0) return false
+  return ['topup', 'top_up', 'top-up', 'wallet_topup', 'deposit', 'wallet_deposit', 'admin_credit'].includes(type)
+}
+
+function isCompletedDeposit(status?: string | null) {
+  return ['completed', 'success', 'successful', 'credited', 'complete', 'paid', 'finished'].includes(String(status || '').toLowerCase())
+}
+
+function normalizeLedgerText(value?: unknown) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_')
+}
+
+
+function isWalletSpendTransaction(tx: any) {
+  const type = normalizeLedgerText(tx.type)
+  return [
+    'purchase',
+    'admin_debit',
+    'staff_debit',
+    'debit',
+    'withdrawal',
+    'chargeback',
+    'correction_debit',
+  ].includes(type)
+}
+
+function isWalletRefundTransaction(tx: any) {
+  const type = normalizeLedgerText(tx.type)
+  return ['refund', 'purchase_refund', 'auto_refund'].includes(type)
+}
+
+
+function getWalletTransactionDisplayAmount(tx: any) {
+  if (isBalanceNeutralLedgerEvidence(tx)) return 0
+  const amount = Number(tx.amount || 0)
+  const absoluteAmount = Math.abs(amount)
+  const type = normalizeLedgerText(tx.type)
+
+  if (isWalletSpendTransaction(tx)) return -absoluteAmount
+  if (isWalletRefundTransaction(tx)) return absoluteAmount
+
+  if ([
+    'topup',
+    'top_up',
+    'wallet_topup',
+    'wallet_deposit',
+    'deposit',
+    'credit',
+    'admin_credit',
+    'staff_credit',
+    'promotion_credit',
+    'correction_credit',
+    'referral_withdrawal',
+  ].includes(type)) {
+    return absoluteAmount
+  }
+
+  return amount
+}
+
+function formatAdminNaira(value?: number | null) {
+  const amount = Number(value || 0)
+  return `₦${amount.toLocaleString('en-NG', { maximumFractionDigits: 2 })}`
+}
+
+function formatRegistrationTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return 'Unknown'
+  return new Intl.DateTimeFormat('en-GB', {
+    day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+    timeZone: 'Europe/London', timeZoneName: 'short',
+  }).format(date)
+}
+
+function parseAdminUserAgent(userAgent?: string | null) {
+  const ua = String(userAgent || '')
+  const lower = ua.toLowerCase()
+
+  const browser = lower.includes('edg/')
+    ? 'Edge'
+    : lower.includes('opr/') || lower.includes('opera')
+      ? 'Opera'
+      : lower.includes('crios')
+        ? 'Chrome iOS'
+        : lower.includes('chrome/')
+          ? 'Chrome'
+          : lower.includes('firefox/')
+            ? 'Firefox'
+            : lower.includes('safari/')
+              ? 'Safari'
+              : 'Unknown browser'
+
+  const os = /iphone|ipad|ipod/.test(lower)
+    ? 'iOS'
+    : lower.includes('android')
+      ? 'Android'
+      : lower.includes('windows')
+        ? 'Windows'
+        : lower.includes('mac os x') || lower.includes('macintosh')
+          ? 'macOS'
+          : lower.includes('linux')
+            ? 'Linux'
+            : 'Unknown OS'
+
+  const deviceType = /ipad|tablet/.test(lower)
+    ? 'tablet'
+    : /mobile|iphone|ipod|android/.test(lower)
+      ? 'phone'
+      : lower
+        ? 'desktop'
+        : 'unknown'
+
+  const model = lower.includes('iphone')
+    ? 'iPhone'
+    : lower.includes('ipad')
+      ? 'iPad'
+      : lower.includes('android')
+        ? 'Android device'
+        : os === 'Windows'
+          ? 'Windows desktop'
+          : os === 'macOS'
+            ? 'Mac desktop'
+            : deviceType === 'desktop'
+              ? 'Desktop'
+              : 'Unknown device'
+
+  return {
+    deviceLabel: `${model} · ${browser}`,
+    deviceType,
+    os,
+    browser,
+    userAgent: ua,
+  }
+}
+
+function formatAdminVisitLocation(visit: any): string | null {
+  if (!visit) return null
+  const parts = [
+    visit.ip_city,
+    visit.ip_region,
+    visit.ip_country || visit.ip_country_code,
+  ].map((value) => String(value || '').trim()).filter(Boolean)
+
+  return parts.length > 0 ? parts.join(', ') : null
+}
+
+function formatAdminVisitIsp(visit: any): string | null {
+  if (!visit) return null
+  const isp = String(visit.ip_isp || '').trim()
+  const asn = String(visit.ip_asn || '').trim()
+  return [isp, asn ? `ASN ${asn}` : ''].filter(Boolean).join(' · ') || null
+}
+
+async function getEdgeFunctionErrorMessage(error: any, fallback: string) {
+  let message = error?.message || fallback
+  const context = error?.context
+
+  if (context && typeof context.json === 'function') {
+    try {
+      const body = await context.clone().json()
+      message = body?.message || body?.error || body?.details || message
+    } catch {
+      // Keep the fallback when Supabase has already consumed the response body.
+    }
+  } else if (context?.body) {
+    try {
+      const body = typeof context.body === 'string' ? JSON.parse(context.body) : context.body
+      message = body?.message || body?.error || body?.details || message
+    } catch {
+      // Keep the fallback for non-JSON function bodies.
+    }
+  }
+
+  return message
+}
+
+function normalizeStatus(status?: string | null) {
+  return String(status || 'unknown').replace(/_/g, ' ')
+}
+
+function isPositiveStatus(status?: string | null) {
+  return ['completed', 'success', 'successful', 'credited', 'active', 'processing'].includes(String(status || '').toLowerCase())
+}
+
+function isCustomerHistoryVisible(row: AdminHistoryRow) {
+  const status = String(row.status || '').toLowerCase()
+  if (['failed', 'pending', 'waiting', 'expired'].includes(status)) return false
+
+  if (row.kind === 'deposits') return isCompletedDeposit(status)
+  if (row.kind === 'products') return ['completed', 'success', 'successful'].includes(status)
+  if (row.kind === 'sms') {
+    return status === 'completed' || (status === 'cancelled' && !!row.raw?.refunded_at)
+  }
+  if (row.kind === 'crypto') {
+    return ['completed', 'success', 'successful', 'credited', 'partially_paid'].includes(status)
+  }
+  if (row.kind === 'bills') return ['completed', 'success', 'successful'].includes(status)
+  if (row.kind === 'giftcards') return ['completed', 'success', 'successful'].includes(status)
+  if (row.kind === 'social') {
+    return ['processing', 'in_progress', 'completed', 'success', 'successful', 'partial'].includes(status)
+  }
+
+  return false
+}
+
+function hasVerifiedCustomerProfile(row: AdminHistoryRow) {
+  if (!row.user_id) return false
+  return row.user_is_staff === false && row.user_is_admin === false
+}
+
+function buildServiceOrdersFromHistory(rows: AdminHistoryRow[]) {
+  return rows
+    .filter((row) => ['bills', 'giftcards', 'social', 'crypto'].includes(row.kind))
+    .map((row) => ({
+      ...(row.raw || {}),
+      id: row.raw?.id || row.id,
+      user_id: row.user_id,
+      amount: row.amount,
+      status: row.status,
+      created_at: row.date,
+      commerce_source: row.kind,
+    }))
+}
+
+function AdminControlSection({
+  title,
+  description,
+  children,
+}: {
+  title: string
+  description?: string
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Card className="overflow-hidden rounded-2xl border-slate-200 bg-white/90 shadow-sm dark:border-white/10 dark:bg-card/90">
+      <CardHeader className="p-0">
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className="flex w-full items-center justify-between gap-3 px-4 py-4 text-left md:cursor-default md:px-5"
+        >
+          <span className="min-w-0">
+            <CardTitle className="truncate text-base md:text-lg">{title}</CardTitle>
+            {description && (
+              <span className="mt-1 hidden text-xs leading-5 text-muted-foreground md:block">
+                {description}
+              </span>
+            )}
+          </span>
+          <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform md:hidden', open && 'rotate-180')} />
+        </button>
+      </CardHeader>
+      <CardContent className={cn('space-y-4 px-4 pb-4 pt-0 md:block md:px-5 md:pb-5', open ? 'block' : 'hidden')}>
+        {description && (
+          <p className="text-xs leading-5 text-muted-foreground md:hidden">{description}</p>
+        )}
+        {children}
+      </CardContent>
+    </Card>
+  )
 }
 
 export default function AdminPage() {
+  const { user } = useAuth()
+  const isPartnerOwner = user?.id === 'c1396bda-86e2-4dfc-94bb-0d95469d1d36'
+  const { toast } = useToast()
+
   // Real data state
   const [categories, setCategories] = useState<Category[]>([])
   const [productGroups, setProductGroups] = useState<ProductGroup[]>([])
+  const [favoriteProductGroupIds, setFavoriteProductGroupIds] = useState<string[]>([])
   const [individualAccounts, setIndividualAccounts] = useState<IndividualAccount[]>([])
+  const [individualAccountsCount, setIndividualAccountsCount] = useState<number>(0)
+  const [individualAccountsPage, setIndividualAccountsPage] = useState(0)
+  const [individualAccountsLoading, setIndividualAccountsLoading] = useState(false)
+  const [individualAccountsError, setIndividualAccountsError] = useState<string | null>(null)
+  const [individualAccountsReload, setIndividualAccountsReload] = useState(0)
   const [userCount, setUserCount] = useState<number>(0)
   const [salesStats, setSalesStats] = useState({ totalSales: 0, totalRevenue: 0 })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // User management state
+  const [users, setUsers] = useState<any[]>([])
+  const [userSearchQuery, setUserSearchQuery] = useState('')
+  const [isSearching, setIsSearching] = useState(false)
+  const [balanceRows, setBalanceRows] = useState<CustomerBalanceRow[]>([])
+  const [balanceTotal, setBalanceTotal] = useState(0)
+  const [balancePage, setBalancePage] = useState(0)
+  const [balanceSort, setBalanceSort] = useState<CustomerBalanceSort>('balance_desc')
+  const [balanceEmailInput, setBalanceEmailInput] = useState('')
+  const [balanceEmailFilter, setBalanceEmailFilter] = useState('')
+  const [balanceReload, setBalanceReload] = useState(0)
+  const [balanceLoading, setBalanceLoading] = useState(false)
+  const [balanceError, setBalanceError] = useState<string | null>(null)
+  const [selectedUser, setSelectedUser] = useState<any>(null)
+  const [viewUserOpen, setViewUserOpen] = useState(false)
+  const [userFinancialTruth, setUserFinancialTruth] = useState<AdminWalletFinancialTruth | null>(null)
+  const [userFinancialTruthLoading, setUserFinancialTruthLoading] = useState(false)
+  const [userFinancialTruthError, setUserFinancialTruthError] = useState<string | null>(null)
+  const userFinancialTruthRequestRef = useRef(0)
+  const [adjustBalanceOpen, setAdjustBalanceOpen] = useState(false)
+  const [adjustmentAmount, setAdjustmentAmount] = useState('')
+  const [adjustmentReason, setAdjustmentReason] = useState('')
+  const [adjustmentReference, setAdjustmentReference] = useState('')
+  const [adjustmentType, setAdjustmentType] = useState<'add' | 'subtract' | 'chargeback'>('add')
+  const [ledgerOnlyCredit, setLedgerOnlyCredit] = useState(false)
+  const [recoverPaymentOpen, setRecoverPaymentOpen] = useState(false)
+  const [recoverReference, setRecoverReference] = useState('')
+  const [recoverReason, setRecoverReason] = useState('')
+  const [recoverBusy, setRecoverBusy] = useState(false)
+  const [userTransactions, setUserTransactions] = useState<any[]>([])
+  const [userActivityError, setUserActivityError] = useState<string | null>(null)
+  const [userActivityWarning, setUserActivityWarning] = useState<string | null>(null)
+  const [userActivityLoading, setUserActivityLoading] = useState(false)
+  const [userOrders, setUserOrders] = useState<any[]>([])
+  const [userSecurityEvents, setUserSecurityEvents] = useState<any[]>([])
+  const [showAllUserTransactions, setShowAllUserTransactions] = useState(false)
+  const [showAllUserOrders, setShowAllUserOrders] = useState(false)
+  const [showAllUserSecurityEvents, setShowAllUserSecurityEvents] = useState(false)
+  const [isAdjusting, setIsAdjusting] = useState(false)
+  const [isSuspendingUser, setIsSuspendingUser] = useState(false)
+  const [isUnsuspendingUser, setIsUnsuspendingUser] = useState(false)
+
+  // Fraud review state
+  const [fraudRows, setFraudRows] = useState<FraudReviewRow[]>([])
+  const [fraudLoading, setFraudLoading] = useState(false)
+  const [fraudError, setFraudError] = useState<string | null>(null)
+  const [fraudTelemetryError, setFraudTelemetryError] = useState<string | null>(null)
+  const [fraudLastLoadedAt, setFraudLastLoadedAt] = useState<string | null>(null)
+  const fraudInitialScanStartedRef = useRef(false)
+  const [fraudSearchQuery, setFraudSearchQuery] = useState('')
+  const [fraudReviewFilter, setFraudReviewFilter] = useState<'all' | 'overspent' | 'excess' | 'suspended' | 'unblock' | 'review' | 'duplicate' | 'watchlist' | 'historical' | 'internal'>('all')
+  const [suspensionTarget, setSuspensionTarget] = useState<{ id: string; email: string } | null>(null)
+  const [suspensionReason, setSuspensionReason] = useState('')
+  const [suspensionEvidenceReviewed, setSuspensionEvidenceReviewed] = useState(false)
+  const [fraudUnsuspendingUserId, setFraudUnsuspendingUserId] = useState<string | null>(null)
+
+  // Website-wide activity histories
+  const [historyRows, setHistoryRows] = useState<AdminHistoryRow[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+  const [historySearchQuery, setHistorySearchQuery] = useState('')
+  const [historyErrors, setHistoryErrors] = useState<Record<string, string>>({})
+  const [emailedDormantCustomers, setEmailedDormantCustomers] = useState<EmailedDormantCustomer[]>([])
+
+  // Sales analytics and recommendation automation
+  const [salesOrders, setSalesOrders] = useState<any[]>([])
+  const [salesSmsOrders, setSalesSmsOrders] = useState<any[]>([])
+  const [salesProfiles, setSalesProfiles] = useState<any[]>([])
+  const [salesVisits, setSalesVisits] = useState<any[]>([])
+  const [revenueEvents, setRevenueEvents] = useState<any[]>([])
+  const [croDecisionRows, setCroDecisionRows] = useState<any[]>([])
+  const [croExperimentRows, setCroExperimentRows] = useState<any[]>([])
+  const [croInsightRows, setCroInsightRows] = useState<any[]>([])
+  const [croRelationshipRows, setCroRelationshipRows] = useState<any[]>([])
+  const [revenueQualityRows, setRevenueQualityRows] = useState<any[]>([])
+  const [revenueFeatureRows, setRevenueFeatureRows] = useState<any[]>([])
+  const [croOpportunityRows, setCroOpportunityRows] = useState<any[]>([])
+  const [revenueForecastRows, setRevenueForecastRows] = useState<any[]>([])
+  const [croEvaluationRows, setCroEvaluationRows] = useState<any[]>([])
+  const [croSimulationRows, setCroSimulationRows] = useState<any[]>([])
+  const [croDriftRows, setCroDriftRows] = useState<any[]>([])
+  const [croModelRows, setCroModelRows] = useState<any[]>([])
+  const [revenueIdentityLinks, setRevenueIdentityLinks] = useState<any[]>([])
+  const [croActionPlanRows, setCroActionPlanRows] = useState<any[]>([])
+  const [croLifecycleActionRows, setCroLifecycleActionRows] = useState<any[]>([])
+  const [communicationPreferenceRows, setCommunicationPreferenceRows] = useState<any[]>([])
+  const [salesLoading, setSalesLoading] = useState(false)
+  const [salesTargetInput, setSalesTargetInput] = useState('0')
+  const [salesTargetSaving, setSalesTargetSaving] = useState(false)
+  const [promotionMaxDiscountPct, setPromotionMaxDiscountPct] = useState('20')
+  const [promotionMonthlyBudgetNgn, setPromotionMonthlyBudgetNgn] = useState('0')
+  const [recommendationAutomationEnabled, setRecommendationAutomationEnabled] = useState(true)
+  const [recommendationAutomationSaving, setRecommendationAutomationSaving] = useState(false)
+  const [croGlobalEnabled, setCroGlobalEnabled] = useState(false)
+  const [croShadowModeEnabled, setCroShadowModeEnabled] = useState(true)
+  const [croAutonomyLevel, setCroAutonomyLevel] = useState('2')
+  const [croGlobalHoldoutPct, setCroGlobalHoldoutPct] = useState('5')
+  const [croExperimentationEnabled, setCroExperimentationEnabled] = useState(false)
+  const [croControlSaving, setCroControlSaving] = useState(false)
+  const [croActionPlanUpdatingKey, setCroActionPlanUpdatingKey] = useState<string | null>(null)
+  const [croMaintenanceEnabled, setCroMaintenanceEnabled] = useState(true)
+  const [croMaintenanceSaving, setCroMaintenanceSaving] = useState(false)
+  const [croMaintenanceRunning, setCroMaintenanceRunning] = useState(false)
+  const [croMaintenanceLastRunAt, setCroMaintenanceLastRunAt] = useState('')
+  const [croMaintenanceLastStatus, setCroMaintenanceLastStatus] = useState('never_run')
+  const [croMaintenanceLastSummary, setCroMaintenanceLastSummary] = useState<Record<string, any>>({})
+  const [croMaintenanceFreezeReason, setCroMaintenanceFreezeReason] = useState('')
+  const [lifecycleActionUpdatingKey, setLifecycleActionUpdatingKey] = useState<string | null>(null)
+  const [dataQualityScanning, setDataQualityScanning] = useState(false)
+  const [productGraphBuilding, setProductGraphBuilding] = useState(false)
+  const [explicitRelationshipSaving, setExplicitRelationshipSaving] = useState(false)
+  const [explicitRelationshipDraft, setExplicitRelationshipDraft] = useState<{
+    fromProductId: string
+    toProductId: string
+    relationshipType: ExplicitProductRelationshipType
+    strength: string
+  }>({
+    fromProductId: '',
+    toProductId: '',
+    relationshipType: 'COMPATIBLE_WITH',
+    strength: '1',
+  })
+  const [runtimeIntelligenceRefreshing, setRuntimeIntelligenceRefreshing] = useState(false)
+  const [experimentCreatingKey, setExperimentCreatingKey] = useState<string | null>(null)
+  const [evaluationRunning, setEvaluationRunning] = useState(false)
+  const [salesErrors, setSalesErrors] = useState<Record<string, string>>({})
+
+
+  // NGN/USD rate override setting
+  const [ngnUsdRate, setNgnUsdRate] = useState('')
+  const [savingNgnUsdRate, setSavingNgnUsdRate] = useState(false)
+  const [loadingNgnUsdRate, setLoadingNgnUsdRate] = useState(true)
+
+  // Ercas Pay gateway toggle
+  const [ercasEnabled, setErcasEnabled] = useState(false)
+  const [savingErcasEnabled, setSavingErcasEnabled] = useState(false)
+  const [loadingErcasEnabled, setLoadingErcasEnabled] = useState(true)
+
+  // PocketFi bank picker
+  const POCKETFI_BANKS = [
+    { value: 'kuda', label: 'Kuda Bank' },
+    { value: '9psb', label: '9PSB' },
+    { value: 'paga', label: 'Paga' },
+    { value: 'saveheaven', label: 'Save Heaven' },
+  ] as const
+  const [pocketfiBank, setPocketfiBankState] = useState(() => localStorage.getItem('admin_pocketfi_bank') || 'kuda')
+  const [savingPocketfiBank, setSavingPocketfiBank] = useState(false)
+  const [loadingPocketfiBank, setLoadingPocketfiBank] = useState(!localStorage.getItem('admin_pocketfi_bank'))
+
+  // Support links settings
+  const [supportWhatsappUrl, setSupportWhatsappUrl] = useState('')
+  const [supportTelegramUrl, setSupportTelegramUrl] = useState('')
+  const [supportChannelUrl, setSupportChannelUrl] = useState('')
+  const [supportPopupMessage, setSupportPopupMessage] = useState('')
+  const [savingSupportLinks, setSavingSupportLinks] = useState(false)
+  const [loadingSupportLinks, setLoadingSupportLinks] = useState(true)
+
+  // Bitrefill catalog curation (blocked products)
+  const [bitrefillBlocklist, setBitrefillBlocklist] = useState<{ product_id: string; name: string }[]>([])
+  const [loadingBitrefillBlocklist, setLoadingBitrefillBlocklist] = useState(true)
+  const [savingBitrefillBlocklist, setSavingBitrefillBlocklist] = useState(false)
+  const [bitrefillCurationQuery, setBitrefillCurationQuery] = useState('')
+  const [bitrefillCurationResults, setBitrefillCurationResults] = useState<{ product_id: string; name: string }[]>([])
+  const [bitrefillCurationSearching, setBitrefillCurationSearching] = useState(false)
+
   // UI state
+  const [adminTab, setAdminTab] = useState<AdminTabValue>('templates')
   const [csvFile, setCsvFile] = useState<File | null>(null)
+  const [csvFormat, setCsvFormat] = useState<string>('auto')
+  const [csvSkipHeader, setCsvSkipHeader] = useState(false)
+  const [csvReview, setCsvReview] = useState<AdminImportReview | null>(null)
+  const [csvReviewLoading, setCsvReviewLoading] = useState(false)
+  const [csvReviewError, setCsvReviewError] = useState<string | null>(null)
+  const [csvUploading, setCsvUploading] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    if (!csvFile) {
+      setCsvReview(null)
+      setCsvReviewError(null)
+      setCsvReviewLoading(false)
+      return
+    }
+    setCsvReview(null)
+    setCsvReviewError(null)
+    setCsvReviewLoading(true)
+    csvFile.text().then(text => {
+      if (!active) return
+      const review = analyzeAdminImport(text, csvFormat === 'auto' ? undefined : csvFormat)
+      setCsvReview(review)
+      setCsvSkipHeader(review.requiresCsvHeader || review.likelyHeader)
+    }).catch(() => {
+      if (active) setCsvReviewError('This file could not be read. Select a CSV or TXT file and try again.')
+    }).finally(() => {
+      if (active) setCsvReviewLoading(false)
+    })
+    return () => { active = false }
+  }, [csvFile, csvFormat])
   const [newProduct, setNewProduct] = useState({
     title: '',
     category: '',
@@ -94,47 +1032,2323 @@ export default function AdminPage() {
   const [editingAccount, setEditingAccount] = useState<IndividualAccount | null>(null)
   const [editingCategory, setEditingCategory] = useState<Category | null>(null)
   const [editingTemplate, setEditingTemplate] = useState<any | null>(null)
+  const [resettingSupplierFallbackId, setResettingSupplierFallbackId] = useState<string | null>(null)
+
+  // Product suggestions ("trending category" panel)
+  const [productSuggestions, setProductSuggestions] = useState<ProductSuggestion[]>([])
+  const [isCheckingTrends, setIsCheckingTrends] = useState(false)
+  const [restockingId, setRestockingId] = useState<string | null>(null)
+  const [restockQty, setRestockQty] = useState<Record<string, number>>({})
+
+  // SMM Services management
+  const [smmServices, setSmmServices] = useState<any[]>([])
+  const [smmServicesLoading, setSmmServicesLoading] = useState(false)
+  const [smmServicesQuery, setSmmServicesQuery] = useState('')
+  const [smmTogglingId, setSmmTogglingId] = useState<number | null>(null)
+  const [smmSyncing, setSmmSyncing] = useState(false)
+  const [smmExpandedPlatforms, setSmmExpandedPlatforms] = useState<Set<string>>(new Set())
+
+  // SMS product catalog curation
+  const [smsProducts, setSmsProducts] = useState<AdminSmsProduct[]>([])
+  const [smsProductsLoading, setSmsProductsLoading] = useState(false)
+  const [smsSavingKey, setSmsSavingKey] = useState<string | null>(null)
+  const [smsSearchQuery, setSmsSearchQuery] = useState('')
+  const [smsGlobalMargin, setSmsGlobalMargin] = useState('700')
+  const [smsKeepAutoApply, setSmsKeepAutoApply] = useState(true)
+  const [smsPriceInputs, setSmsPriceInputs] = useState<Record<string, string>>({})
+  const [smsMarginInputs, setSmsMarginInputs] = useState<Record<string, string>>({})
+  const [smsDiagnostics, setSmsDiagnostics] = useState<AdminSmsDiagnostics | null>(null)
+  const [smsCatalogNotice, setSmsCatalogNotice] = useState('')
+  const [smsExchangeRateSource, setSmsExchangeRateSource] = useState<'override' | 'live' | 'unavailable' | 'unknown'>('unknown')
+  const [smsRoundToNearestTen, setSmsRoundToNearestTen] = useState(false)
+
+  // Private reseller / partner API
+  const [apiPartners, setApiPartners] = useState<ApiPartner[]>([])
+  const [apiPartnerOrders, setApiPartnerOrders] = useState<ApiPartnerOrder[]>([])
+  const [apiPartnerLogs, setApiPartnerLogs] = useState<ApiPartnerLog[]>([])
+  const [apiPartnerWebhooks, setApiPartnerWebhooks] = useState<ApiPartnerWebhookDelivery[]>([])
+  const [apiPartnersLoading, setApiPartnersLoading] = useState(false)
+  const [apiPartnerSaving, setApiPartnerSaving] = useState<string | null>(null)
+  const [generatedApiCredentials, setGeneratedApiCredentials] = useState<{ apiKey: string; webhookSecret: string } | null>(null)
+  const [apiPartnerEditDrafts, setApiPartnerEditDrafts] = useState<Record<string, ApiPartnerEditDraft>>({})
+  const [apiPartnerCreditReasons, setApiPartnerCreditReasons] = useState<Record<string, string>>({})
+  const [apiPartnerBalanceDrafts, setApiPartnerBalanceDrafts] = useState<Record<string, { amount: string; reason: string }>>({})
+  const [newApiPartner, setNewApiPartner] = useState({
+    name: '',
+    allowed_sections: PARTNER_SECTIONS.map((section) => section.key),
+    webhook_url: '',
+    unlimited_credit: false,
+    credit_reason: '',
+  })
+
+  // SMS Orders management
+  type AdminSmsOrder = {
+    id: string; reference: string; service_name: string; status: string
+    price_ngn: number; created_at: string; cancelled_at?: string; refunded_at?: string
+    has_code: boolean; order_type: string; provider_request_id?: string
+    profiles?: { email?: string; full_name?: string }
+  }
+  const [smsOrders, setSmsOrders] = useState<AdminSmsOrder[]>([])
+  const [smsOrdersLoading, setSmsOrdersLoading] = useState(false)
+  const [smsOrdersCancellingId, setSmsOrdersCancellingId] = useState<string | null>(null)
+  const [smsOrdersAutoCancelling, setSmsOrdersAutoCancelling] = useState(false)
+  const [smsOrdersFilter, setSmsOrdersFilter] = useState<'all' | 'pending' | 'cancelled' | 'completed'>('all')
+
+  const loadSmsOrders = useCallback(async () => {
+    setSmsOrdersLoading(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('smsbus', { body: { action: 'admin_sms_orders' } })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to load SMS orders')
+      setSmsOrders(data.data || [])
+    } catch (err: any) {
+      toast({ title: 'Failed to load SMS orders', description: err.message, variant: 'destructive' })
+    } finally {
+      setSmsOrdersLoading(false)
+    }
+  }, [toast])
+
+  const adminCancelSmsOrder = useCallback(async (orderId: string) => {
+    setSmsOrdersCancellingId(orderId)
+    try {
+      const { data, error } = await supabase.functions.invoke('smsbus', { body: { action: 'admin_cancel_sms_order', order_id: orderId } })
+      if (error) throw error
+      if (data?.code === 'SMS_OUTCOME_REVIEW_REQUIRED' || data?.review_required) {
+        toast({ title: 'SMS outcome review required', description: 'No refund has been confirmed for this order.' })
+        await loadSmsOrders()
+        return
+      }
+      if (!data?.success) throw new Error(data?.error || 'Failed to cancel order')
+      toast({ title: data?.data?.refunded_at ? 'Order cancelled and refunded' : 'Order outcome needs review' })
+      await loadSmsOrders()
+    } catch (err: any) {
+      toast({ title: 'Cancel failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setSmsOrdersCancellingId(null)
+    }
+  }, [toast, loadSmsOrders])
+
+  const adminAutoCancelStale = useCallback(async () => {
+    setSmsOrdersAutoCancelling(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('smsbus', { body: { action: 'admin_auto_cancel_stale' } })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to auto-cancel')
+      toast({
+        title: `${data.cancelled_count ?? 0} cancelled; ${data.review_count ?? 0} need review; ${data.failed_count ?? 0} failed`,
+        description: Number(data.review_count || 0) + Number(data.failed_count || 0) > 0
+          ? 'Unconfirmed supplier outcomes remain under review; no refund is assumed.' : undefined,
+      })
+      await loadSmsOrders()
+    } catch (err: any) {
+      toast({ title: 'Auto-cancel failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setSmsOrdersAutoCancelling(false)
+    }
+  }, [toast, loadSmsOrders])
+
+  const invokePartnerAdmin = useCallback(async <T,>(payload: Record<string, unknown>): Promise<T> => {
+    const { data, error } = await supabase.functions.invoke('partner-api', { body: payload })
+    if (error) {
+      const context = (error as any)?.context
+      if (context) {
+        const bodyText = await context.clone().text().catch(() => '')
+        if (bodyText) {
+          try {
+            const parsed = JSON.parse(bodyText)
+            throw new Error(parsed?.error || parsed?.message || bodyText)
+          } catch (parseError) {
+            if (parseError instanceof Error && parseError.message !== bodyText) throw parseError
+            throw new Error(bodyText)
+          }
+        }
+      }
+      throw error
+    }
+    if (!data?.success) throw new Error(data?.error || 'Partner API action failed')
+    return data as T
+  }, [])
+
+  const loadApiPartners = useCallback(async () => {
+    setApiPartnersLoading(true)
+    try {
+      const data = await invokePartnerAdmin<ApiPartnersResponse>({ action: 'admin_list_partners' })
+      setApiPartners(data.data?.partners || [])
+      setApiPartnerOrders(data.data?.orders || [])
+      setApiPartnerLogs(data.data?.logs || [])
+      setApiPartnerWebhooks(data.data?.webhooks || [])
+    } catch (err: any) {
+      toast({ title: 'Failed to load API partners', description: err.message, variant: 'destructive' })
+    } finally {
+      setApiPartnersLoading(false)
+    }
+  }, [invokePartnerAdmin, toast])
+
+  const createApiPartner = useCallback(async () => {
+    if (!isPartnerOwner) {
+      toast({ title: 'Owner access required', variant: 'destructive' })
+      return
+    }
+    if (!newApiPartner.name.trim()) {
+      toast({ title: 'Partner name required', variant: 'destructive' })
+      return
+    }
+    setApiPartnerSaving('create')
+    try {
+      await invokePartnerAdmin({
+        action: 'admin_create_partner',
+        name: newApiPartner.name,
+        webhook_url: newApiPartner.webhook_url,
+        allowed_sections: newApiPartner.allowed_sections,
+        unlimited_credit: newApiPartner.unlimited_credit,
+        credit_reason: newApiPartner.credit_reason,
+      })
+      setNewApiPartner({
+        name: '',
+        allowed_sections: PARTNER_SECTIONS.map((section) => section.key),
+        webhook_url: '',
+        unlimited_credit: false,
+        credit_reason: '',
+      })
+      toast({ title: 'API partner created' })
+      await loadApiPartners()
+    } catch (err: any) {
+      toast({ title: 'Create partner failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setApiPartnerSaving(null)
+    }
+  }, [invokePartnerAdmin, isPartnerOwner, loadApiPartners, newApiPartner, toast])
+
+  const updateApiPartner = useCallback(async (partnerId: string, updates: Record<string, unknown>) => {
+    if (PARTNER_API_INCIDENT_PAUSED) {
+      toast({ title: 'Partner API paused', description: 'Partner updates are locked during the wallet security review.', variant: 'destructive' })
+      return
+    }
+    setApiPartnerSaving(partnerId)
+    try {
+      await invokePartnerAdmin({ action: 'admin_update_partner', partner_id: partnerId, ...updates })
+      toast({ title: 'API partner updated' })
+      await loadApiPartners()
+    } catch (err: any) {
+      toast({ title: 'Update failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setApiPartnerSaving(null)
+    }
+  }, [invokePartnerAdmin, loadApiPartners, toast])
+
+  const startApiPartnerEdit = useCallback((partner: ApiPartner) => {
+    if (PARTNER_API_INCIDENT_PAUSED) {
+      toast({ title: 'Partner API paused', description: 'Partner editing is locked during the wallet security review.', variant: 'destructive' })
+      return
+    }
+    setApiPartnerEditDrafts(prev => ({
+      ...prev,
+      [partner.id]: {
+        name: partner.name || '',
+        webhook_url: partner.webhook_url || '',
+        allowed_sections: partner.allowed_sections?.length
+          ? partner.allowed_sections
+          : PARTNER_SECTIONS.map((section) => section.key),
+      },
+    }))
+  }, [toast])
+
+  const cancelApiPartnerEdit = useCallback((partnerId: string) => {
+    setApiPartnerEditDrafts(prev => {
+      const next = { ...prev }
+      delete next[partnerId]
+      return next
+    })
+  }, [])
+
+  const saveApiPartnerEdit = useCallback(async (partnerId: string) => {
+    if (PARTNER_API_INCIDENT_PAUSED) {
+      toast({ title: 'Partner API paused', description: 'Partner updates are locked during the wallet security review.', variant: 'destructive' })
+      return
+    }
+    const draft = apiPartnerEditDrafts[partnerId]
+    if (!draft?.name.trim()) {
+      toast({ title: 'Partner name required', variant: 'destructive' })
+      return
+    }
+    if (draft.allowed_sections.length === 0) {
+      toast({ title: 'Pick at least one allowed section', variant: 'destructive' })
+      return
+    }
+
+    setApiPartnerSaving(partnerId)
+    try {
+      await invokePartnerAdmin({
+        action: 'admin_update_partner',
+        partner_id: partnerId,
+        name: draft.name.trim(),
+        webhook_url: draft.webhook_url.trim(),
+        allowed_sections: draft.allowed_sections,
+      })
+      cancelApiPartnerEdit(partnerId)
+      toast({ title: 'API partner updated', description: 'Existing API keys and webhook secret were kept.' })
+      await loadApiPartners()
+    } catch (err: any) {
+      toast({ title: 'Update failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setApiPartnerSaving(null)
+    }
+  }, [apiPartnerEditDrafts, cancelApiPartnerEdit, invokePartnerAdmin, loadApiPartners, toast])
+
+  const generateApiPartnerKey = useCallback(async (partnerId: string) => {
+    if (!isPartnerOwner) {
+      toast({ title: 'Owner access required', variant: 'destructive' })
+      return
+    }
+    setApiPartnerSaving(`key-${partnerId}`)
+    try {
+      const data = await invokePartnerAdmin<{ success: boolean; data: ApiPartnerKey & { api_key: string; webhook_secret?: string } }>({
+        action: 'admin_generate_key',
+        partner_id: partnerId,
+        key_name: 'Website key',
+        scopes: PARTNER_SCOPES,
+      })
+      setGeneratedApiCredentials({
+        apiKey: data.data.api_key,
+        webhookSecret: data.data.webhook_secret || '',
+      })
+      toast({ title: 'API key generated', description: 'Copy the key and webhook secret now. They will not be shown again.' })
+      await loadApiPartners()
+    } catch (err: any) {
+      toast({ title: 'Key generation failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setApiPartnerSaving(null)
+    }
+  }, [invokePartnerAdmin, isPartnerOwner, loadApiPartners, toast])
+
+  const revokeApiPartnerKey = useCallback(async (keyId: string) => {
+    if (!isPartnerOwner) {
+      toast({ title: 'Owner access required', variant: 'destructive' })
+      return
+    }
+    setApiPartnerSaving(`revoke-${keyId}`)
+    try {
+      await invokePartnerAdmin({ action: 'admin_revoke_key', key_id: keyId })
+      toast({ title: 'API key revoked' })
+      await loadApiPartners()
+    } catch (err: any) {
+      toast({ title: 'Revoke failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setApiPartnerSaving(null)
+    }
+  }, [invokePartnerAdmin, isPartnerOwner, loadApiPartners, toast])
+
+  const setApiPartnerCredit = useCallback(async (partner: ApiPartner) => {
+    if (!isPartnerOwner) return
+    const reason = apiPartnerCreditReasons[partner.id]?.trim() || ''
+    if (reason.length < 10) {
+      toast({ title: 'Enter a credit decision reason of at least 10 characters', variant: 'destructive' })
+      return
+    }
+    setApiPartnerSaving(`credit-${partner.id}`)
+    try {
+      await invokePartnerAdmin({ action: 'admin_set_unlimited_credit', partner_id: partner.id,
+        enabled: !partner.unlimited_credit, reason })
+      setApiPartnerCreditReasons(prev => ({ ...prev, [partner.id]: '' }))
+      toast({ title: partner.unlimited_credit ? 'Prepaid mode set' : 'Unlimited credit granted' })
+      await loadApiPartners()
+    } catch (err: any) {
+      toast({ title: 'Credit mode update failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setApiPartnerSaving(null)
+    }
+  }, [apiPartnerCreditReasons, invokePartnerAdmin, isPartnerOwner, loadApiPartners, toast])
+
+  const adjustApiPartnerBalance = useCallback(async (partner: ApiPartner) => {
+    if (!isPartnerOwner) return
+    const draft = apiPartnerBalanceDrafts[partner.id]
+    const amount = Number(draft?.amount)
+    if (!Number.isFinite(amount) || amount === 0 || Math.abs(Math.round(amount * 100) - amount * 100) > 1e-7 || !draft?.reason.trim()) {
+      toast({ title: 'Enter a non-zero amount and an audit reason', variant: 'destructive' })
+      return
+    }
+    setApiPartnerSaving(`balance-${partner.id}`)
+    try {
+      await invokePartnerAdmin({ action: 'admin_adjust_balance', partner_id: partner.id,
+        amount_ngn: amount, reason: draft.reason.trim() })
+      setApiPartnerBalanceDrafts(prev => ({ ...prev, [partner.id]: { amount: '', reason: '' } }))
+      toast({ title: 'Partner prepaid balance adjusted' })
+      await loadApiPartners()
+    } catch (err: any) {
+      toast({ title: 'Balance adjustment failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setApiPartnerSaving(null)
+    }
+  }, [apiPartnerBalanceDrafts, invokePartnerAdmin, isPartnerOwner, loadApiPartners, toast])
+
+  useEffect(() => {
+    loadApiPartners()
+  }, [loadApiPartners])
+
+
+  // ── Telegram Stars admin state ──────────────────────────────────────────────
+  type AdminTelegramOrder = {
+    id: string; reference: string; order_type: string; username: string
+    recipient_name?: string; quantity?: number; months?: number
+    price_ngn: number; istar_amount?: number; wallet_type: string
+    status: string; error_message?: string; refunded_at?: string
+    completed_at?: string; created_at: string
+    profiles?: { email?: string; full_name?: string }
+  }
+  type TelegramProduct = {
+    id: string; product_type: string; label: string
+    quantity?: number; months?: number; price_ngn: number
+    is_active: boolean; sort_order: number
+  }
+
+  const [tgOrders, setTgOrders] = useState<AdminTelegramOrder[]>([])
+  const [tgOrdersLoading, setTgOrdersLoading] = useState(false)
+  const [tgOrdersFilter, setTgOrdersFilter] = useState<'all' | 'pending' | 'processing' | 'completed' | 'failed'>('all')
+  const [tgProducts, setTgProducts] = useState<TelegramProduct[]>(() => {
+    try { return JSON.parse(localStorage.getItem('admin_tg_products') || '[]') } catch { return [] }
+  })
+  const [tgProductsLoading, setTgProductsLoading] = useState(false)
+  const [tgProductSaving, setTgProductSaving] = useState<string | null>(null)
+  const [tgProductPrices, setTgProductPrices] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('admin_tg_prices') || '{}') } catch { return {} }
+  })
+  const [tgWalletType, setTgWalletType] = useState<'USDT' | 'TON'>('USDT')
+  const [tgWalletBalance, setTgWalletBalance] = useState<{ balance: number; currency: string } | null>(null)
+  const [tgWalletBalanceLoading, setTgWalletBalanceLoading] = useState(false)
+
+  const loadTgOrders = useCallback(async () => {
+    setTgOrdersLoading(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-stars', { body: { action: 'admin_get_orders' } })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to load orders')
+      setTgOrders(data.data || [])
+    } catch (err: any) {
+      toast({ title: 'Failed to load Telegram orders', description: err.message, variant: 'destructive' })
+    } finally {
+      setTgOrdersLoading(false)
+    }
+  }, [toast])
+
+  const loadTgProducts = useCallback(async () => {
+    setTgProductsLoading(true)
+    try {
+      const [productsRes, pricingRes] = await Promise.all([
+        supabase.functions.invoke('telegram-stars', { body: { action: 'admin_get_premium_products' } }),
+        supabase.functions.invoke('telegram-stars', { body: { action: 'get_star_pricing' } }),
+      ])
+      if (productsRes.error) throw productsRes.error
+      const products: TelegramProduct[] = productsRes.data?.data || []
+      setTgProducts(products)
+      localStorage.setItem('admin_tg_products', JSON.stringify(products))
+      const prices: Record<string, string> = Object.fromEntries(products.map((p: TelegramProduct) => [p.id, String(p.price_ngn)]))
+      if (pricingRes.data?.data) {
+        const cfg = pricingRes.data.data
+        prices['__cost_per_star__'] = String(cfg.cost_per_star_usdt ?? 0.013)
+        prices['__tiers__'] = JSON.stringify(cfg.markup_tiers ?? [])
+        // Premium: the edge function get_star_pricing doesn't return premium config —
+        // we read it from app_settings via the products response which already has live prices
+        // Store each product's live computed price and load premium markup separately
+      }
+      // Fetch live premium pricing config from edge function (hits iStar /premium/packages live)
+      const premPricingRes = await supabase.functions.invoke('telegram-stars', { body: { action: 'admin_get_premium_pricing' } })
+      if (premPricingRes.data?.data) {
+        const cfg2 = premPricingRes.data.data
+        prices['__usdt_to_ngn__'] = String(cfg2.usdt_to_ngn ?? 0)
+        for (const [months, cost] of Object.entries(cfg2.costs as Record<string, number>)) {
+          prices[`__telegram_premium_cost_usdt_${months}m__`] = String(cost)
+        }
+        for (const [months, markup] of Object.entries(cfg2.markups as Record<string, number>)) {
+          prices[`__telegram_premium_markup_ngn_${months}m__`] = String(markup)
+        }
+      }
+      setTgProductPrices(prices)
+      localStorage.setItem('admin_tg_prices', JSON.stringify(prices))
+    } catch (err: any) {
+      toast({ title: 'Failed to load Telegram config', description: err.message, variant: 'destructive' })
+    } finally {
+      setTgProductsLoading(false)
+    }
+  }, [toast])
+
+  const saveTgProductPrice = useCallback(async (product: TelegramProduct, newPrice: number) => {
+    setTgProductSaving(product.id)
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-stars', {
+        body: { action: 'admin_upsert_product', id: product.id, ...product, price_ngn: newPrice }
+      })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to save')
+      setTgProducts(prev => {
+        const next = prev.map(p => p.id === product.id ? { ...p, price_ngn: newPrice } : p)
+        localStorage.setItem('admin_tg_products', JSON.stringify(next))
+        return next
+      })
+      toast({ title: 'Price saved' })
+    } catch (err: any) {
+      toast({ title: 'Save failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setTgProductSaving(null)
+    }
+  }, [toast])
+
+  const toggleTgProduct = useCallback(async (product: TelegramProduct) => {
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-stars', {
+        body: { action: 'admin_upsert_product', id: product.id, ...product, is_active: !product.is_active }
+      })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to update')
+      setTgProducts(prev => {
+        const next = prev.map(p => p.id === product.id ? { ...p, is_active: !p.is_active } : p)
+        localStorage.setItem('admin_tg_products', JSON.stringify(next))
+        return next
+      })
+    } catch (err: any) {
+      toast({ title: 'Update failed', description: err.message, variant: 'destructive' })
+    }
+  }, [toast])
+
+  const checkTgWalletBalance = useCallback(async () => {
+    setTgWalletBalanceLoading(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-stars', { body: { action: 'admin_wallet_balance', wallet_type: tgWalletType } })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to fetch balance')
+      setTgWalletBalance(data.data)
+    } catch (err: any) {
+      toast({ title: 'Failed to fetch iStar balance', description: err.message, variant: 'destructive' })
+    } finally {
+      setTgWalletBalanceLoading(false)
+    }
+  }, [toast, tgWalletType])
+
+  const saveTgWalletType = useCallback(async (type: 'USDT' | 'TON') => {
+    setTgWalletType(type)
+    await upsertAppSetting('telegram_wallet_type', type)
+    toast({ title: `Wallet type set to ${type}` })
+  }, [toast])
+  // ─────────────────────────────────────────────────────────────────────────────
+
+  // Email / Broadcast state
+  const [emailSubject, setEmailSubject] = useState('TallyStore Notification')
+  const [emailMessage, setEmailMessage] = useState('')
+  const [emailRecipients, setEmailRecipients] = useState<string[]>([])
+  const [emailRecipientInput, setEmailRecipientInput] = useState('')
+  const [isSendingEmail, setIsSendingEmail] = useState(false)
+  const [broadcastJobs, setBroadcastJobs] = useState<any[]>([])
+  const [isBroadcasting, setIsBroadcasting] = useState(false)
+  const [isDryRun, setIsDryRun] = useState(false)
+  const [dryRunResult, setDryRunResult] = useState<any>(null)
+  const [isLoadingJobs, setIsLoadingJobs] = useState(false)
+  const broadcastPollRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Discount codes / flash sales state
+  const [discountCodes, setDiscountCodes] = useState<DiscountCode[]>([])
+  const [isLoadingCodes, setIsLoadingCodes] = useState(false)
+  const [newCode, setNewCode] = useState('')
+  const [newCodePercent, setNewCodePercent] = useState('10')
+  const [newCodeScope, setNewCodeScope] = useState<'store' | 'category' | 'product'>('store')
+  const [newCodeCategoryId, setNewCodeCategoryId] = useState('')
+  const [newCodeProductGroupId, setNewCodeProductGroupId] = useState('')
+  const [newCodeMaxUses, setNewCodeMaxUses] = useState('')
+  const [newCodeExpiresAt, setNewCodeExpiresAt] = useState('')
+  const [isCreatingCode, setIsCreatingCode] = useState(false)
+
+  // ── Staff roles state ──────────────────────────────────────────────────
+  const [staffUsers, setStaffUsers] = useState<any[]>([])
+  const [staffSearchQuery, setStaffSearchQuery] = useState('')
+  const [staffSearchResults, setStaffSearchResults] = useState<any[]>([])
+  const [staffSearching, setStaffSearching] = useState(false)
+  const [staffPermissionsMap, setStaffPermissionsMap] = useState<Record<string, Record<string, { is_enabled: boolean; auto_approve: boolean }>>>({})
+  const [savingStaffPerm, setSavingStaffPerm] = useState<string | null>(null)
+  const [pendingActions, setPendingActions] = useState<any[]>([])
+  const [loadingPendingActions, setLoadingPendingActions] = useState(false)
+  const [approvingAction, setApprovingAction] = useState<string | null>(null)
+  const [expandedStaffUser, setExpandedStaffUser] = useState<string | null>(null)
+
+  const loadDiscountCodes = useCallback(async () => {
+    setIsLoadingCodes(true)
+    try {
+      const codes = await getDiscountCodes()
+      setDiscountCodes(codes)
+    } catch (err) {
+      console.error('Failed to load discount codes:', err)
+    } finally {
+      setIsLoadingCodes(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadDiscountCodes()
+  }, [loadDiscountCodes])
+
+  const handleCreateDiscountCode = async () => {
+    if (!newCode.trim()) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Enter a code' })
+      return
+    }
+    const pct = parseInt(newCodePercent, 10)
+    if (!pct || pct < 1 || pct > 100) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Percent off must be between 1 and 100' })
+      return
+    }
+    setIsCreatingCode(true)
+    try {
+      const result = await createDiscountCode({
+        code: newCode.trim(),
+        percent_off: pct,
+        category_id: newCodeScope === 'category' ? (newCodeCategoryId || null) : null,
+        product_group_id: newCodeScope === 'product' ? (newCodeProductGroupId || null) : null,
+        max_uses: newCodeMaxUses ? parseInt(newCodeMaxUses, 10) : null,
+        expires_at: newCodeExpiresAt ? new Date(newCodeExpiresAt).toISOString() : null,
+      })
+      if (result.success) {
+        toast({ title: 'Discount code created', description: `${newCode.trim().toUpperCase()} is now active` })
+        setNewCode('')
+        setNewCodePercent('10')
+        setNewCodeScope('store')
+        setNewCodeCategoryId('')
+        setNewCodeProductGroupId('')
+        setNewCodeMaxUses('')
+        setNewCodeExpiresAt('')
+        await loadDiscountCodes()
+      } else {
+        toast({ variant: 'destructive', title: 'Error', description: result.error || 'Failed to create code' })
+      }
+    } catch (err) {
+      toast({ variant: 'destructive', title: 'Error', description: 'Failed to create code' })
+    } finally {
+      setIsCreatingCode(false)
+    }
+  }
+
+  const handleToggleCodeActive = async (id: string, isActive: boolean) => {
+    const ok = await setDiscountCodeActive(id, isActive)
+    if (ok) {
+      setDiscountCodes(prev => prev.map(c => c.id === id ? { ...c, is_active: isActive } : c))
+    } else {
+      toast({ variant: 'destructive', title: 'Error', description: 'Failed to update code' })
+    }
+  }
+
+  // ==================== EMAIL / BROADCAST HANDLERS ====================
+
+  const loadBroadcastJobs = useCallback(async () => {
+    try {
+      setIsLoadingJobs(true)
+      const { data, error } = await supabase.functions.invoke('email/broadcast-status', { method: 'GET' })
+      if (error) throw error
+      if (data?.success) setBroadcastJobs(data.jobs || [])
+    } catch (err) {
+      console.error('Failed to load broadcast jobs:', err)
+    } finally {
+      setIsLoadingJobs(false)
+    }
+  }, [])
+
+  // Poll for active jobs
+  useEffect(() => {
+    const hasActive = broadcastJobs.some(j => j.status === 'queued' || j.status === 'processing')
+    if (hasActive && !broadcastPollRef.current) {
+      broadcastPollRef.current = setInterval(loadBroadcastJobs, 5000)
+    } else if (!hasActive && broadcastPollRef.current) {
+      clearInterval(broadcastPollRef.current)
+      broadcastPollRef.current = null
+    }
+    return () => { if (broadcastPollRef.current) clearInterval(broadcastPollRef.current) }
+  }, [broadcastJobs, loadBroadcastJobs])
+
+  // ==================== SUPPORT LINKS SETTINGS ====================
+
+  useEffect(() => {
+    const loadSupportLinks = async () => {
+      setLoadingSupportLinks(true)
+      try {
+        const [wa, tg, ch, pm] = await Promise.all([
+          getAppSetting('support_whatsapp_url'),
+          getAppSetting('support_telegram_url'),
+          getAppSetting('support_channel_url'),
+          getAppSetting('support_popup_message'),
+        ])
+        setSupportWhatsappUrl(wa || '')
+        setSupportTelegramUrl(tg || '')
+        setSupportChannelUrl(ch || '')
+        setSupportPopupMessage(pm || '')
+      } catch (err) {
+        console.error('Failed to load support links:', err)
+      } finally {
+        setLoadingSupportLinks(false)
+      }
+    }
+    loadSupportLinks()
+  }, [])
+
+  // ==================== PRODUCT SUGGESTIONS ====================
+  // "Trending category, want to add a product?" panel - trigger is your own
+  // store's sales velocity (see computeAndUpsertTrendSuggestions). Accepting
+  // a suggestion only creates a draft product; it never spends money by
+  // itself - see handleTestStock for the explicit, separate buy action.
+
+  const loadProductSuggestions = useCallback(async () => {
+    try {
+      const data = await getProductSuggestions('pending')
+      setProductSuggestions(data)
+    } catch (err) {
+      console.error('Failed to load product suggestions:', err)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadProductSuggestions()
+  }, [loadProductSuggestions])
+
+  const handleCheckTrends = async () => {
+    setIsCheckingTrends(true)
+    try {
+      const created = await computeAndUpsertTrendSuggestions()
+      await loadProductSuggestions()
+      toast({
+        title: created.length > 0 ? `${created.length} new trend(s) found` : 'No new trends',
+        description: created.length > 0
+          ? 'Check the Product Suggestions panel below.'
+          : "Nothing crossed the trending threshold since the last check.",
+      })
+    } catch (err) {
+      console.error('Failed to check trends:', err)
+      toast({ title: 'Failed to check trends', variant: 'destructive' })
+    } finally {
+      setIsCheckingTrends(false)
+    }
+  }
+
+  const handleDismissSuggestion = async (id: string) => {
+    const ok = await dismissSuggestion(id)
+    if (ok) {
+      setProductSuggestions(prev => prev.filter(s => s.id !== id))
+      toast({ title: 'Dismissed', description: "Won't resurface for a few days unless the trend continues." })
+    }
+  }
+
+  const handleAcceptSuggestion = async (suggestion: ProductSuggestion) => {
+    const newProduct = await acceptSuggestion(suggestion.id)
+    if (newProduct) {
+      setProductSuggestions(prev => prev.filter(s => s.id !== suggestion.id))
+      const updatedProductGroups = await getManagedProductGroups()
+      setProductGroups(updatedProductGroups)
+      setEditingTemplate(newProduct)
+      toast({
+        title: 'Draft product created',
+        description: 'Fill in a provider ID below, then use "Test Stock" to buy a small batch.',
+      })
+    } else {
+      toast({ title: 'Failed to create draft product', variant: 'destructive' })
+    }
+  }
+
+  const handleTestStock = async (productGroupId: string) => {
+    const quantity = restockQty[productGroupId] || 10
+    setRestockingId(productGroupId)
+    try {
+      const result = await manualRestock(productGroupId, quantity)
+      if (result.success) {
+        const updatedProductGroups = await getManagedProductGroups()
+        setProductGroups(updatedProductGroups)
+        toast({ title: `Bought ${result.bought} unit(s)`, description: 'Stock count updated.' })
+      } else {
+        toast({ title: 'Test stock purchase failed', description: result.error, variant: 'destructive' })
+      }
+    } catch (err) {
+      console.error('Test stock purchase failed:', err)
+      toast({ title: 'Test stock purchase failed', variant: 'destructive' })
+    } finally {
+      setRestockingId(null)
+    }
+  }
+
+  const handleSaveSupportLinks = async () => {
+    setSavingSupportLinks(true)
+    try {
+      const saved = await Promise.all([
+        upsertAppSetting('support_whatsapp_url', supportWhatsappUrl.trim()),
+        upsertAppSetting('support_telegram_url', supportTelegramUrl.trim()),
+        upsertAppSetting('support_channel_url', supportChannelUrl.trim()),
+        upsertAppSetting('support_popup_message', supportPopupMessage.trim()),
+      ])
+      if (saved.some((ok) => !ok)) throw new Error('One or more support settings could not be saved')
+      // Bust the in-memory cache so changes take effect immediately
+      const { invalidateSupportSettingsCache } = await import('@/hooks/useSupportSettings')
+      invalidateSupportSettingsCache()
+      toast({ title: 'Support links and login announcement saved' })
+    } catch (err) {
+      toast({ title: 'Failed to save', variant: 'destructive' })
+    } finally {
+      setSavingSupportLinks(false)
+    }
+  }
+
+  // ==================== NGN/USD RATE SETTINGS ====================
+
+  useEffect(() => {
+    const loadRate = async () => {
+      setLoadingNgnUsdRate(true)
+      try {
+        const value = await getAppSetting('ngn_usd_rate')
+        if (value) setNgnUsdRate(value)
+      } catch (err) {
+        console.error('Failed to load NGN/USD rate override:', err)
+      } finally {
+        setLoadingNgnUsdRate(false)
+      }
+    }
+    loadRate()
+  }, [])
+
+  const handleSaveNgnUsdRate = async () => {
+    const rate = parseFloat(ngnUsdRate)
+    if (isNaN(rate) || rate <= 0) {
+      toast({ title: 'Invalid value', description: 'Enter a positive NGN-per-USD rate', variant: 'destructive' })
+      return
+    }
+    setSavingNgnUsdRate(true)
+    try {
+      const ok = await upsertAppSetting('ngn_usd_rate', rate.toString())
+      if (ok) {
+        // useExchangeRate caches the rate in sessionStorage for an hour;
+        // clear it so this browser picks up the new rate immediately
+        // instead of appearing to do nothing until the cache expires.
+        clearExchangeRateCache()
+        toast({ title: 'Saved', description: `NGN/USD rate set to ₦${rate} per $1` })
+      } else {
+        toast({ title: 'Failed to save', description: 'Please try again', variant: 'destructive' })
+      }
+    } finally {
+      setSavingNgnUsdRate(false)
+    }
+  }
+
+  const handleClearNgnUsdRate = async () => {
+    setSavingNgnUsdRate(true)
+    try {
+      const ok = await upsertAppSetting('ngn_usd_rate', '')
+      if (ok) {
+        clearExchangeRateCache()
+        setNgnUsdRate('')
+        toast({ title: 'Cleared', description: 'Now using the live exchange rate' })
+      }
+    } finally {
+      setSavingNgnUsdRate(false)
+    }
+  }
+
+  // ==================== POCKETFI BANK PICKER ====================
+
+  useEffect(() => {
+    const loadPocketfiBank = async () => {
+      setLoadingPocketfiBank(true)
+      try {
+        const value = await getAppSetting('pocketfi_bank')
+        if (value) {
+          setPocketfiBankState(value)
+          localStorage.setItem('admin_pocketfi_bank', value)
+        }
+      } catch (err) {
+        console.error('Failed to load pocketfi_bank:', err)
+      } finally {
+        setLoadingPocketfiBank(false)
+      }
+    }
+    loadPocketfiBank()
+  }, [])
+
+  const handleSavePocketfiBank = async (bank: string) => {
+    setSavingPocketfiBank(true)
+    try {
+      const ok = await upsertAppSetting('pocketfi_bank', bank)
+      if (ok) {
+        setPocketfiBankState(bank)
+        localStorage.setItem('admin_pocketfi_bank', bank)
+        const label = POCKETFI_BANKS.find((b) => b.value === bank)?.label ?? bank
+        toast({ title: 'PocketFi bank updated', description: `Virtual accounts will now use ${label}.` })
+      } else {
+        toast({ title: 'Failed to save', description: 'Please try again', variant: 'destructive' })
+      }
+    } catch (err) {
+      toast({ title: 'Error', description: 'Could not save setting', variant: 'destructive' })
+    } finally {
+      setSavingPocketfiBank(false)
+    }
+  }
+
+  // ==================== ERCAS PAY TOGGLE ====================
+
+  useEffect(() => {
+    const loadErcasEnabled = async () => {
+      setLoadingErcasEnabled(true)
+      try {
+        const value = await getAppSetting('ercas_enabled')
+        setErcasEnabled(value === 'true')
+      } catch (err) {
+        console.error('Failed to load ercas_enabled:', err)
+      } finally {
+        setLoadingErcasEnabled(false)
+      }
+    }
+    loadErcasEnabled()
+  }, [])
+
+  const handleToggleErcas = async () => {
+    setSavingErcasEnabled(true)
+    const next = !ercasEnabled
+    try {
+      const ok = await upsertAppSetting('ercas_enabled', next ? 'true' : 'false')
+      if (ok) {
+        setErcasEnabled(next)
+        toast({ title: next ? 'Ercas Pay enabled' : 'Ercas Pay disabled', description: next ? 'Customers can now top up via Ercas Pay.' : 'Only PocketFi is shown to customers.' })
+      } else {
+        toast({ title: 'Failed to save', description: 'Please try again', variant: 'destructive' })
+      }
+    } catch (err) {
+      toast({ title: 'Error', description: 'Could not save setting', variant: 'destructive' })
+    } finally {
+      setSavingErcasEnabled(false)
+    }
+  }
+
+  // ==================== STAFF ROLES MANAGEMENT ====================
+
+  const loadStaffUsers = useCallback(async () => {
+    const { data, error } = await supabase.functions.invoke('manage-staff', {
+      body: { action: 'list_staff' },
+    })
+    if (error || data?.error) {
+      console.error('Failed to load staff users:', error || data?.error)
+      setStaffUsers([])
+      return
+    }
+    setStaffUsers(data?.users || [])
+  }, [])
+
+  useEffect(() => { loadStaffUsers() }, [loadStaffUsers])
+
+  const loadPendingActions = useCallback(async () => {
+    setLoadingPendingActions(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('manage-staff', {
+        body: { action: 'list_pending' },
+      })
+      if (error || data?.error) {
+        console.error('Failed to load pending staff actions:', error || data?.error)
+        setPendingActions([])
+        return
+      }
+      setPendingActions(data?.actions || [])
+    } finally {
+      setLoadingPendingActions(false)
+    }
+  }, [])
+
+  useEffect(() => { loadPendingActions() }, [loadPendingActions])
+
+  const loadStaffPermsForUser = useCallback(async (userId: string) => {
+    const { data, error } = await supabase.functions.invoke('manage-staff', {
+      body: { action: 'list_permissions', user_id: userId },
+    })
+    if (error || data?.error) {
+      console.error('Failed to load staff permissions:', error || data?.error)
+      return
+    }
+    const map: Record<string, { is_enabled: boolean; auto_approve: boolean }> = {}
+    for (const row of data?.permissions || []) map[row.permission_key] = { is_enabled: row.is_enabled, auto_approve: row.auto_approve }
+    setStaffPermissionsMap(prev => ({ ...prev, [userId]: map }))
+  }, [])
+
+  const handleGrantStaff = async (userId: string) => {
+    const { data, error } = await supabase.functions.invoke('manage-staff', {
+      body: { action: 'grant_staff', user_id: userId },
+    })
+    if (error || data?.error) {
+      toast({ title: 'Could not grant staff role', description: data?.error || error?.message || 'Please try again', variant: 'destructive' })
+      return
+    }
+    loadStaffUsers()
+    setStaffPermissionsMap(prev => { const next = { ...prev }; delete next[userId]; return next })
+    setStaffSearchResults(prev => prev.map(u => u.id === userId ? { ...u, is_staff: true } : u))
+    toast({ title: 'Staff role granted' })
+  }
+
+  const handleRevokeStaff = async (userId: string) => {
+    const { data, error } = await supabase.functions.invoke('manage-staff', {
+      body: { action: 'revoke_staff', user_id: userId },
+    })
+    if (error || data?.error) {
+      toast({ title: 'Could not revoke staff role', description: data?.error || error?.message || 'Please try again', variant: 'destructive' })
+      return
+    }
+    loadStaffUsers()
+    setStaffPermissionsMap(prev => { const next = { ...prev }; delete next[userId]; return next })
+    toast({ title: 'Staff role revoked' })
+  }
+
+  const handleToggleStaffPerm = async (
+    userId: string,
+    permKey: string,
+    value: boolean,
+  ) => {
+    setSavingStaffPerm(`${userId}-${permKey}-is_enabled`)
+    const updated = { is_enabled: value, auto_approve: value && permKey !== 'action_adjust_balance' }
+    try {
+      const { data, error } = await supabase.functions.invoke('manage-staff', {
+        body: {
+          action: 'set_permission',
+          user_id: userId,
+          permission_key: permKey,
+          ...updated,
+        },
+      })
+      if (error || data?.error) {
+        toast({ title: 'Could not save staff permission', description: data?.error || error?.message || 'Please try again', variant: 'destructive' })
+        return
+      }
+      setStaffPermissionsMap(prev => ({
+        ...prev,
+        [userId]: { ...prev[userId], [permKey]: updated },
+      }))
+    } finally {
+      setSavingStaffPerm(null)
+    }
+  }
+
+  const handleSearchForStaff = async () => {
+    if (!staffSearchQuery.trim()) return
+    setStaffSearching(true)
+    const results = await searchUsers(staffSearchQuery)
+    setStaffSearchResults(results)
+    setStaffSearching(false)
+  }
+
+  const handleApproveAction = async (action: any) => {
+    setApprovingAction(action.id)
+    try {
+      const { data, error } = await supabase.functions.invoke('manage-staff', {
+        body: { action: 'approve_action', action_id: action.id },
+      })
+      if (error || data?.success === false) throw new Error(data?.error || error?.message || 'Failed to approve action')
+
+      if (['add_single_account', 'bulk_upload_accounts', 'update_product_group'].includes(action.action_type)) {
+        const updatedProductGroups = await getManagedProductGroups()
+        setProductGroups(updatedProductGroups)
+      }
+      if (action.action_type === 'create_category') {
+        const cats = await getCategories()
+        setCategories(cats)
+      }
+      if (['create_discount_code', 'toggle_discount_code'].includes(action.action_type)) {
+        const codes = await getDiscountCodes()
+        setDiscountCodes(codes)
+      }
+      if (
+        action.action_type === 'upsert_setting' && String(action.action_data?.setting_key || '').startsWith('support_') ||
+        action.action_type === 'upsert_settings' && Object.keys(action.action_data?.settings || {}).some((key) => key.startsWith('support_'))
+      ) {
+        const { invalidateSupportSettingsCache } = await import('@/hooks/useSupportSettings')
+        invalidateSupportSettingsCache()
+      }
+      toast({ title: 'Action approved and applied' })
+      loadPendingActions()
+    } catch (err: any) {
+      toast({ variant: 'destructive', title: 'Failed to apply action', description: err?.message || 'The server rejected this action.' })
+    } finally {
+      setApprovingAction(null)
+    }
+  }
+
+  const handleRejectAction = async (actionId: string) => {
+    const { data, error } = await supabase.functions.invoke('manage-staff', {
+      body: { action: 'reject_action', action_id: actionId },
+    })
+    if (error || data?.success === false) {
+      toast({ title: 'Reject failed', description: data?.error || error?.message || 'Could not reject action.', variant: 'destructive' })
+      return
+    }
+    toast({ title: 'Action rejected' })
+    loadPendingActions()
+  }
+
+  // ==================== SMM SERVICES MANAGEMENT ====================
+
+  // Load ALL services (no limit) grouped by platform so admin can bulk-manage
+  const loadSmmServices = useCallback(async (query: string) => {
+    setSmmServicesLoading(true)
+    try {
+      const { data, error } = await supabase.rpc('get_admin_smm_services', {
+        p_query: query.trim() || null,
+      })
+      if (error) throw error
+      if (!Array.isArray(data)) throw new Error('Service catalog unavailable')
+      setSmmServices(data)
+    } catch (err) {
+      toast({ title: 'Failed to load services', variant: 'destructive' })
+    } finally {
+      setSmmServicesLoading(false)
+    }
+  }, [toast])
+
+  const handleToggleSmmService = async (id: number, currentlyActive: boolean) => {
+    setSmmTogglingId(id)
+    try {
+      const { error } = await supabase.rpc('set_admin_smm_service_active', {
+        p_service_id: id,
+        p_platform: null,
+        p_is_active: !currentlyActive,
+      })
+      if (error) throw error
+      setSmmServices(prev => prev.map(s => s.id === id ? { ...s, is_active: !currentlyActive } : s))
+    } catch (err) {
+      toast({ title: 'Failed to update service', variant: 'destructive' })
+    } finally {
+      setSmmTogglingId(null)
+    }
+  }
+
+  // Bulk toggle all services for a platform (or all platforms when platform='')
+  const handleBulkTogglePlatform = async (platform: string, makeActive: boolean) => {
+    setSmmServicesLoading(true)
+    try {
+      const { error } = await supabase.rpc('set_admin_smm_service_active', {
+        p_service_id: null,
+        p_platform: platform || null,
+        p_is_active: makeActive,
+      })
+      if (error) throw error
+      setSmmServices(prev =>
+        prev.map(s => (!platform || s.platform === platform) ? { ...s, is_active: makeActive } : s)
+      )
+      toast({ title: makeActive ? 'All shown' : 'All hidden', description: platform ? `${platform} services updated` : 'All services updated' })
+    } catch (err) {
+      toast({ title: 'Bulk update failed', variant: 'destructive' })
+    } finally {
+      setSmmServicesLoading(false)
+    }
+  }
+
+  const handleSmmSync = async () => {
+    setSmmSyncing(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('smm-sync-services')
+      if (error) throw error
+      toast({ title: 'Sync complete', description: `${data?.stats?.processed || 0} services updated` })
+      loadSmmServices(smmServicesQuery)
+    } catch (err: any) {
+      toast({ title: 'Sync failed', description: err.message, variant: 'destructive' })
+    } finally {
+      setSmmSyncing(false)
+    }
+  }
+
+  // ==================== SMS PRODUCT CATALOG ====================
+
+  const loadSmsProducts = useCallback(async () => {
+    setSmsProductsLoading(true)
+    try {
+      const { data, error } = await supabase.functions.invoke<AdminSmsCatalogResponse>('smsbus', {
+        body: { action: 'admin_sms_products' },
+      })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to load SMS products')
+      const products = data.data || []
+      const diagnostics = data.diagnostics || null
+      setSmsProducts(products)
+      setSmsDiagnostics(diagnostics)
+      setSmsExchangeRateSource(data.exchange_rate_source || 'unknown')
+      setSmsRoundToNearestTen(data.round_to_nearest_10 === true)
+      if (data.configured === false || diagnostics?.configured === false) {
+        setSmsCatalogNotice('SMS provider API key is not configured on the deployed smsbus function.')
+      } else if (products.length === 0) {
+        const verification = diagnostics?.verification_services ?? 0
+        const verificationCountry = diagnostics?.verification_country_services ?? 0
+        const prices = diagnostics?.prices_services ?? 0
+        const pricesCountry = diagnostics?.prices_country_services ?? 0
+        setSmsCatalogNotice(`SMS provider returned 0 USA products. Verification ${verification}/${verificationCountry}; prices ${prices}/${pricesCountry}; source ${diagnostics?.selected_source || 'none'}.`)
+      } else {
+        setSmsCatalogNotice('')
+      }
+      if (typeof data.global_margin_ngn === 'number') setSmsGlobalMargin(String(data.global_margin_ngn))
+      setSmsPriceInputs(Object.fromEntries(products.map((product) => [
+        product.service_code,
+        product.price_override_ngn === null || product.price_override_ngn === undefined ? '' : String(product.price_override_ngn),
+      ])))
+      setSmsMarginInputs(Object.fromEntries(products.map((product) => [
+        product.service_code,
+        String(product.margin_ngn ?? data.global_margin_ngn ?? 700),
+      ])))
+    } catch (err: any) {
+      toast({
+        title: 'Failed to load SMS products',
+        description: err.message || 'Run the SMS product settings migration, then try again.',
+        variant: 'destructive',
+      })
+      setSmsCatalogNotice(err.message || 'Failed to load SMS products.')
+    } finally {
+      setSmsProductsLoading(false)
+    }
+  }, [toast])
+
+  useEffect(() => {
+    loadSmsProducts()
+  }, [loadSmsProducts])
+
+  const updateSmsProduct = async (serviceCode: string, updates: Record<string, unknown>, reload = false) => {
+    setSmsSavingKey(`${serviceCode}-${Object.keys(updates).join('-')}`)
+    try {
+      const product = smsProducts.find((item) => item.service_code === serviceCode)
+      const { data, error } = await supabase.functions.invoke<{ success: boolean; error?: string }>('smsbus', {
+        body: {
+          action: 'admin_update_sms_product',
+          service_code: serviceCode,
+          service_name: product?.service_name,
+          ...updates,
+        },
+      })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to update SMS product')
+      setSmsProducts(prev => prev.map(item => item.service_code === serviceCode ? { ...item, ...updates } as AdminSmsProduct : item))
+      if (reload) await loadSmsProducts()
+    } catch (err: any) {
+      toast({ title: 'SMS product update failed', description: err.message || 'Please try again', variant: 'destructive' })
+    } finally {
+      setSmsSavingKey(null)
+    }
+  }
+
+  const saveSmsPriceOverride = async (product: AdminSmsProduct) => {
+    const raw = smsPriceInputs[product.service_code] ?? ''
+    const value = raw.trim() === '' ? null : Number(raw)
+    if (value !== null && (!Number.isFinite(value) || value < 0)) {
+      toast({ title: 'Invalid price', description: 'Enter a valid naira amount or leave it blank.', variant: 'destructive' })
+      return
+    }
+    await updateSmsProduct(product.service_code, { price_override_ngn: value === null ? null : Math.round(value) }, true)
+    toast({ title: value === null ? 'Override cleared' : 'Price override saved' })
+  }
+
+  const saveSmsMargin = async (product: AdminSmsProduct) => {
+    const value = Number(smsMarginInputs[product.service_code] ?? '')
+    if (!Number.isFinite(value) || value < 0) {
+      toast({ title: 'Invalid markup', description: 'Enter a valid naira markup.', variant: 'destructive' })
+      return
+    }
+    await updateSmsProduct(product.service_code, { margin_ngn: Math.round(value), auto_markup_enabled: true }, true)
+    toast({ title: 'Product markup saved' })
+  }
+
+  const applySmsGlobalMarkup = async () => {
+    const margin = Number(smsGlobalMargin)
+    if (!Number.isFinite(margin) || margin < 0) {
+      toast({ title: 'Invalid markup', description: 'Enter a valid naira markup.', variant: 'destructive' })
+      return
+    }
+    setSmsSavingKey('global-markup')
+    try {
+      const { data, error } = await supabase.functions.invoke<{ success: boolean; error?: string; count?: number }>('smsbus', {
+        body: { action: 'admin_apply_sms_markup', margin_ngn: Math.round(margin), keep_auto_applying: smsKeepAutoApply },
+      })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to apply markup')
+      await loadSmsProducts()
+      toast({ title: 'SMS markup applied', description: `${data.count || 0} product(s) updated.` })
+    } catch (err: any) {
+      toast({ title: 'Markup failed', description: err.message || 'Please try again', variant: 'destructive' })
+    } finally {
+      setSmsSavingKey(null)
+    }
+  }
+
+  const toggleSmsRounding = async () => {
+    const next = !smsRoundToNearestTen
+    setSmsSavingKey('round-to-10')
+    try {
+      const { data, error } = await supabase.functions.invoke<{ success: boolean; error?: string; round_to_nearest_10?: boolean }>('smsbus', {
+        body: { action: 'admin_set_sms_rounding', round_to_nearest_10: next },
+      })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to update rounding')
+      setSmsRoundToNearestTen(next)
+      await loadSmsProducts()
+      toast({
+        title: next ? 'SMS rounding enabled' : 'SMS rounding disabled',
+        description: next ? 'Auto-markup prices now round up to the next 10.' : 'Auto-markup prices now use the exact naira calculation.',
+      })
+    } catch (err: any) {
+      toast({ title: 'Rounding update failed', description: err.message || 'Please try again', variant: 'destructive' })
+    } finally {
+      setSmsSavingKey(null)
+    }
+  }
+
+  const bulkToggleSmsProducts = async (isEnabled: boolean) => {
+    setSmsSavingKey(isEnabled ? 'enable-all' : 'disable-all')
+    try {
+      const { data, error } = await supabase.functions.invoke<{ success: boolean; error?: string; count?: number }>('smsbus', {
+        body: { action: 'admin_bulk_sms_products', is_enabled: isEnabled },
+      })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Failed to update products')
+      await loadSmsProducts()
+      toast({ title: isEnabled ? 'SMS products enabled' : 'SMS products disabled', description: `${data.count || 0} product(s) updated.` })
+    } catch (err: any) {
+      toast({ title: 'Bulk update failed', description: err.message || 'Please try again', variant: 'destructive' })
+    } finally {
+      setSmsSavingKey(null)
+    }
+  }
+
+  const filteredSmsProducts = useMemo(() => {
+    const query = smsSearchQuery.trim().toLowerCase()
+    return smsProducts
+      .filter((product) => {
+        if (!query) return true
+        return [product.service_name, product.service_code, product.price_ngn, product.available_count]
+          .some((value) => String(value || '').toLowerCase().includes(query))
+      })
+      .sort((a, b) => Number(b.is_favorite) - Number(a.is_favorite) || a.service_name.localeCompare(b.service_name))
+  }, [smsProducts, smsSearchQuery])
+
+  const favoriteSmsProducts = useMemo(
+    () => filteredSmsProducts.filter((product) => product.is_favorite),
+    [filteredSmsProducts],
+  )
+
+  const renderSmsProductRow = (product: AdminSmsProduct) => {
+    const rowSaving = smsSavingKey?.startsWith(product.service_code)
+    return (
+      <div key={product.service_code} className="grid gap-4 border-b py-4 last:border-b-0 lg:grid-cols-[minmax(180px,1.3fr)_220px_minmax(240px,1fr)_90px] lg:items-center">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              title={product.is_favorite ? 'Remove from favorites' : 'Add to favorites'}
+              disabled={rowSaving}
+              onClick={() => updateSmsProduct(product.service_code, { is_favorite: !product.is_favorite })}
+            >
+              <Star className={`h-4 w-4 ${product.is_favorite ? 'fill-yellow-400 text-yellow-500' : 'text-muted-foreground'}`} />
+            </Button>
+            <div className="min-w-0">
+              <p className="truncate font-semibold">{product.service_name}</p>
+              <p className="text-xs text-muted-foreground">
+                {product.available_count.toLocaleString()} available · {Number(product.customer_buy_count || 0).toLocaleString()} buys · {product.service_code}
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-2 pl-10">
+            <Switch
+              checked={product.auto_markup_enabled}
+              disabled={rowSaving}
+              onCheckedChange={(checked) => updateSmsProduct(product.service_code, { auto_markup_enabled: checked }, true)}
+            />
+            <span className="text-sm text-muted-foreground">Auto-markup</span>
+            <Input
+              type="number"
+              min="0"
+              className="h-9 w-28"
+              value={smsMarginInputs[product.service_code] ?? ''}
+              onChange={(event) => setSmsMarginInputs(prev => ({ ...prev, [product.service_code]: event.target.value }))}
+            />
+            <Button type="button" variant="outline" size="sm" disabled={rowSaving} onClick={() => saveSmsMargin(product)}>
+              Save margin
+            </Button>
+          </div>
+        </div>
+
+        <div>
+          <p className="text-xs font-semibold uppercase text-muted-foreground">Provider cost</p>
+          <p className="font-bold">${Number(product.provider_cost_usd || 0).toFixed(2)}</p>
+          <p className="text-xs text-muted-foreground">
+            NGN {Number(product.provider_cost_ngn || 0).toLocaleString()} at {Number(product.exchange_rate || 0).toLocaleString()} / USD
+          </p>
+        </div>
+
+        <div className="flex min-w-0 items-center gap-2">
+          <Input
+            type="number"
+            min="0"
+            placeholder={`Auto NGN ${Number(product.price_ngn || 0).toLocaleString()}`}
+            value={smsPriceInputs[product.service_code] ?? ''}
+            onChange={(event) => setSmsPriceInputs(prev => ({ ...prev, [product.service_code]: event.target.value }))}
+          />
+          <Button type="button" variant="outline" disabled={rowSaving} onClick={() => saveSmsPriceOverride(product)}>
+            {rowSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+          </Button>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 lg:justify-end">
+          <Badge variant={product.pricing_mode === 'override' ? 'default' : 'secondary'} className="whitespace-nowrap">
+            NGN {Number(product.price_ngn || 0).toLocaleString()}
+          </Badge>
+          <Switch
+            checked={product.is_enabled}
+            disabled={rowSaving}
+            onCheckedChange={(checked) => updateSmsProduct(product.service_code, { is_enabled: checked })}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // ==================== BITREFILL GIFT CARD SETTINGS ====================
+
+  useEffect(() => {
+    const loadBitrefillBlocklist = async () => {
+      setLoadingBitrefillBlocklist(true)
+      try {
+        const value = await getAppSetting('bitrefill_blocked_products')
+        if (value) {
+          const parsed = JSON.parse(value)
+          if (Array.isArray(parsed)) setBitrefillBlocklist(parsed)
+        }
+      } catch (err) {
+        console.error('Failed to load Bitrefill blocklist:', err)
+      } finally {
+        setLoadingBitrefillBlocklist(false)
+      }
+    }
+    loadBitrefillBlocklist()
+  }, [])
+
+  const handleBitrefillCurationSearch = async () => {
+    if (!bitrefillCurationQuery.trim()) return
+    setBitrefillCurationSearching(true)
+    setBitrefillCurationResults([])
+    try {
+      const { data, error } = await supabase.functions.invoke('bitrefill-catalog', {
+        body: { action: 'search', query: bitrefillCurationQuery, limit: 24 },
+      })
+      if (error) throw error
+      if (!data?.success) throw new Error(data?.error || 'Search failed')
+      const products = (data.data?.data || []) as { product_id: string; name: string }[]
+      setBitrefillCurationResults(products)
+    } catch (err: any) {
+      toast({ title: 'Search failed', description: err.message || 'Please try again', variant: 'destructive' })
+    } finally {
+      setBitrefillCurationSearching(false)
+    }
+  }
+
+  const saveBitrefillBlocklist = async (next: { product_id: string; name: string }[]) => {
+    setSavingBitrefillBlocklist(true)
+    try {
+      const ok = await upsertAppSetting('bitrefill_blocked_products', JSON.stringify(next))
+      if (ok) {
+        setBitrefillBlocklist(next)
+      } else {
+        toast({ title: 'Failed to save', description: 'Please try again', variant: 'destructive' })
+      }
+    } finally {
+      setSavingBitrefillBlocklist(false)
+    }
+  }
+
+  const handleBlockBitrefillProduct = (product: { product_id: string; name: string }) => {
+    if (bitrefillBlocklist.some(p => p.product_id === product.product_id)) return
+    saveBitrefillBlocklist([...bitrefillBlocklist, product])
+  }
+
+  const handleUnblockBitrefillProduct = (productId: string) => {
+    saveBitrefillBlocklist(bitrefillBlocklist.filter(p => p.product_id !== productId))
+  }
+
+  const buildEmailHtml = (message: string) =>
+    `<div style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
+      <div style="background:linear-gradient(135deg,#7c3aed,#3b82f6);padding:24px;border-radius:12px;color:white;text-align:center;margin-bottom:24px">
+        <h1 style="margin:0;font-size:24px">TallyStore</h1>
+      </div>
+      <div style="padding:16px;line-height:1.6;color:#333">
+        ${message.replace(/\n/g, '<br/>')}
+      </div>
+      <div style="text-align:center;margin-top:24px">
+        <a href="https://tallystore.org/dashboard" style="background:linear-gradient(135deg,#7c3aed,#3b82f6);color:white;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:600;display:inline-block">Go to Wallet</a>
+      </div>
+      <div style="text-align:center;margin-top:32px;color:#999;font-size:12px"><p>TallyStore — Your trusted digital marketplace</p></div>
+    </div>`
+
+  const addEmailRecipient = () => {
+    const email = emailRecipientInput.trim().toLowerCase()
+    if (!email) return
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast({ title: 'Invalid email', description: 'Please enter a valid email address', variant: 'destructive' })
+      return
+    }
+    if (emailRecipients.includes(email)) {
+      toast({ title: 'Duplicate', description: 'This email is already in the list', variant: 'destructive' })
+      return
+    }
+    setEmailRecipients(prev => [...prev, email])
+    setEmailRecipientInput('')
+  }
+
+  const handleSendToList = async () => {
+    if (emailRecipients.length === 0 || !emailMessage.trim()) {
+      toast({ title: 'Missing info', description: 'Add recipients and a message', variant: 'destructive' })
+      return
+    }
+    setIsSendingEmail(true)
+    const html = buildEmailHtml(emailMessage)
+    let sentCount = 0
+    let failCount = 0
+    for (const to of emailRecipients) {
+      try {
+        const { data, error } = await supabase.functions.invoke('email/send', { body: { to, subject: emailSubject, html } })
+        if (error || !data?.success) failCount++
+        else sentCount++
+      } catch { failCount++ }
+    }
+    setIsSendingEmail(false)
+    toast({ title: 'Done', description: `Sent: ${sentCount}, Failed: ${failCount}` })
+    if (sentCount > 0) { setEmailRecipients([]); setEmailMessage('') }
+  }
+
+  const handleBroadcast = async () => {
+    if (!emailMessage.trim()) {
+      toast({ title: 'Missing message', description: 'Write a message before broadcasting', variant: 'destructive' })
+      return
+    }
+    const html = buildEmailHtml(emailMessage)
+
+    if (isDryRun) {
+      setIsBroadcasting(true)
+      try {
+        const { data, error } = await supabase.functions.invoke('email/broadcast', { body: { subject: emailSubject, html, dryRun: true } })
+        if (error) throw error
+        if (data?.success !== true) throw new Error(data?.error || 'Dry run could not be verified.')
+        setDryRunResult(data)
+      } catch (err: any) {
+        toast({ title: 'Dry run failed', description: await readEmailFunctionError(err), variant: 'destructive' })
+      } finally {
+        setIsBroadcasting(false)
+      }
+      return
+    }
+
+    if (!confirm('This will email customers who opted in to promotional email. Sending continues in the background after you close this page. Continue?')) return
+    setIsBroadcasting(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('email/broadcast', { body: { subject: emailSubject, html } })
+      if (error) throw error
+      if (data?.success !== true || !data?.jobId) throw new Error(data?.error || 'Broadcast was not queued.')
+      toast({ title: 'Broadcast queued!', description: data?.message || 'Processing will start within 1 minute.' })
+      setEmailMessage('')
+      setDryRunResult(null)
+      await loadBroadcastJobs()
+    } catch (err: any) {
+      toast({ title: 'Broadcast failed', description: await readEmailFunctionError(err), variant: 'destructive' })
+    } finally {
+      setIsBroadcasting(false)
+    }
+  }
+
+  const handleCancelBroadcast = async (jobId: string) => {
+    if (!confirm('Cancel this broadcast? Emails already sent cannot be undone.')) return
+    try {
+      const { data, error } = await supabase.functions.invoke('email/cancel-broadcast', { body: { jobId } })
+      if (error) throw error
+      toast({ title: 'Cancelled', description: 'Broadcast job cancelled.' })
+      await loadBroadcastJobs()
+    } catch (err: any) {
+      toast({ title: 'Cancel failed', description: err.message, variant: 'destructive' })
+    }
+  }
+
+  const getJobStatusBadge = (status: string) => {
+    switch (status) {
+      case 'queued': return <Badge variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200"><Clock className="h-3 w-3 mr-1" /> Queued</Badge>
+      case 'processing': return <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200"><Loader2 className="h-3 w-3 mr-1 animate-spin" /> Processing</Badge>
+      case 'completed': return <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200"><CheckCircle2 className="h-3 w-3 mr-1" /> Completed</Badge>
+      case 'cancelled': return <Badge variant="outline" className="bg-gray-50 text-gray-500 border-gray-200"><XCircle className="h-3 w-3 mr-1" /> Cancelled</Badge>
+      case 'failed': return <Badge variant="destructive"><XCircle className="h-3 w-3 mr-1" /> Failed</Badge>
+      default: return <Badge variant="outline">{status}</Badge>
+    }
+  }
 
   // Load real data
   useEffect(() => {
     loadAllData()
+    loadBroadcastJobs()
+  }, [loadBroadcastJobs])
+
+  useEffect(() => {
+    window.localStorage.removeItem('tallystore:dormant-customer-email-cohort:v1')
   }, [])
 
   const loadAllData = async () => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
     try {
       setLoading(true)
       setError(null)
 
-      const [categoriesData, productGroupsData, accountsData, userCountData, salesStatsData] = await Promise.all([
+      const initialData = Promise.all([
         getCategories(),
-        getAllProductGroups(),
-        getIndividualAccounts(),
+        getManagedProductGroups(),
+        getIndividualAccountsCount(),
         getUserCount(),
-        getAdminSalesStats()
+        getAdminSalesStats(),
+        getFavoriteProductGroupIds(),
       ])
+      const timeout = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Admin data request timed out')), 15000)
+      })
+      const [categoriesData, productGroupsData, accountsCountData, userCountData, salesStatsData, favoriteIds] = await Promise.race([initialData, timeout])
 
       setCategories(categoriesData)
       setProductGroups(productGroupsData)
-      setIndividualAccounts(accountsData)
+      setIndividualAccountsCount(accountsCountData)
       setUserCount(userCountData)
       setSalesStats(salesStatsData)
-
-      console.log('✅ Admin data loaded:', {
-        categories: categoriesData.length,
-        productGroups: productGroupsData.length,
-        accounts: accountsData.length,
-        users: userCountData,
-        sales: salesStatsData.totalSales,
-        revenue: salesStatsData.totalRevenue
-      })
+      setFavoriteProductGroupIds(favoriteIds)
 
     } catch (err) {
       console.error('❌ Error loading admin data:', err)
       setError('Failed to load admin data')
     } finally {
+      if (timeoutId) clearTimeout(timeoutId)
       setLoading(false)
     }
   }
+
+  // Account credentials are fetched only when the owner opens the inventory tab.
+  useEffect(() => {
+    if (adminTab !== 'products') return
+    let active = true
+    setIndividualAccountsLoading(true)
+    setIndividualAccountsError(null)
+    getIndividualAccountsPage(individualAccountsPage)
+      .then((accounts) => { if (active) setIndividualAccounts(accounts) })
+      .catch(() => { if (active) setIndividualAccountsError('Inventory accounts could not be loaded. Please try again.') })
+      .finally(() => { if (active) setIndividualAccountsLoading(false) })
+    return () => { active = false }
+  }, [adminTab, individualAccountsPage, individualAccountsReload])
+
+  const loadAdminHistories = useCallback(async () => {
+    setHistoryLoading(true)
+    const nextErrors: Record<string, string> = {}
+
+    const readRows = async (label: string, table: string, maxRows = 50000, columns = '*') => {
+      try {
+        const pageSize = 1000
+        const rows: any[] = []
+
+        for (let from = 0; from < maxRows; from += pageSize) {
+          const { data, error } = await supabase
+            .from((table === 'transactions' ? 'transactions_retail' : table === 'revenue_events' ? 'revenue_events_retail' : table) as any)
+            .select(columns)
+            .order('created_at', { ascending: false })
+            .range(from, from + pageSize - 1)
+
+          if (error) throw error
+          rows.push(...(data || []))
+          if (!data || data.length < pageSize) break
+        }
+
+        if (rows.length >= maxRows) {
+          nextErrors[label] = `Loaded the newest ${maxRows.toLocaleString()} rows. Narrow this table if you need older records.`
+        }
+
+        return rows
+      } catch (err: any) {
+        console.warn(`Failed to load ${label}:`, err)
+        nextErrors[label] = err?.message || `Could not load ${label}.`
+        return [] as any[]
+      }
+    }
+
+    try {
+      const [
+        txRows,
+        productOrderRows,
+        smsOrderRows,
+        cryptoTxRows,
+        cryptoWithdrawalRows,
+        billsRows,
+        giftRows,
+        socialRows,
+      ] = await Promise.all([
+        readRows('Deposits', 'transactions'),
+        readRows('Product orders', 'orders_safe_history'),
+        readRows('SMS orders', 'sms_orders', 50000, SMS_ORDER_HISTORY_COLUMNS),
+        readRows('Crypto deposits', 'crypto_transactions'),
+        readRows('Crypto withdrawals', 'crypto_withdrawals'),
+        readRows('Bills and airtime', 'bills_transactions', 50000,
+          'id,user_id,reference,transaction_type,amount,status,service_provider,service_code,beneficiary_phone,payment_source,sagecloud_reference,created_at,completed_at'),
+        readRows('Gift cards', 'bitrefill_orders', 50000,
+          'id,user_id,reference,product_name,quantity,amount_ngn,amount_original,currency,payment_source,status,bitrefill_invoice_id,bitrefill_order_id,created_at'),
+        readRows('Social boost', 'smm_orders', 50000,
+          'id,user_id,service_id,link,quantity,amount_ngn,status,reference,external_order_id,start_count,remains,created_at,updated_at,completed_at'),
+      ])
+
+      const productGroupById = new Map(productGroups.map((group) => [group.id, group]))
+      const categoryById = new Map(categories.map((category) => [category.id, category]))
+      const smmServiceById = new Map(smmServices.map((service) => [Number(service.id), service]))
+
+      const rows: AdminHistoryRow[] = [
+        ...txRows.filter((tx) => isDepositTransaction(tx) && isCompletedDeposit(tx.status)).map((tx): AdminHistoryRow => ({
+          id: `deposit-${tx.id}`,
+          kind: 'deposits',
+          date: tx.created_at,
+          user_id: tx.user_id,
+          title: tx.description || normalizeStatus(tx.type) || 'Wallet deposit',
+          subtitle: tx.ercas_reference ? `Ercas ${tx.ercas_reference}` : 'Wallet funding',
+          amount: Number(tx.amount || 0),
+          status: tx.status,
+          reference: tx.reference || tx.ercas_reference,
+          source: 'Wallet deposits',
+          detail: tx.balance_after == null ? null : `Balance after ${formatAdminNaira(tx.balance_after)}`,
+          raw: tx,
+        })),
+        ...productOrderRows.map((order): AdminHistoryRow => {
+          const group = productGroupById.get(order.product_group_id)
+          const category = group?.category_id ? categoryById.get(group.category_id)?.name : null
+          const details = order.account_details || {}
+          const quantity = Number(details.quantity || 1)
+          return {
+            id: `product-${order.id}`,
+            kind: 'products',
+            date: order.created_at,
+            user_id: order.user_id,
+            title: details.product_name || group?.name || 'Product order',
+            subtitle: `${quantity} item${quantity === 1 ? '' : 's'}${details.category || category ? ` • ${details.category || category}` : ''}`,
+            amount: Number(order.amount || 0),
+            status: order.status,
+            reference: `ORD-${String(order.id || '').slice(0, 8).toUpperCase()}`,
+            source: 'Product orders',
+            detail: order.product_group_id || null,
+            raw: order,
+          }
+        }),
+        ...smsOrderRows.map((order): AdminHistoryRow => ({
+          id: `sms-${order.id}`,
+          kind: 'sms',
+          date: order.created_at,
+          user_id: order.user_id,
+          title: order.service_name || order.service_id || 'SMS number',
+          subtitle: [order.order_type?.toUpperCase(), order.phone_number, order.country_code?.toUpperCase()].filter(Boolean).join(' • '),
+          amount: Number(order.price_ngn || 0),
+          status: order.status,
+          reference: order.reference || order.provider_request_id,
+          source: 'SMS orders',
+          detail: order.refunded_at ? `Refunded ${formatAdminNaira(order.refund_amount_ngn)}` : order.completed_at ? 'Code received' : null,
+          raw: order,
+        })),
+        ...cryptoTxRows.map((tx): AdminHistoryRow => ({
+          id: `crypto-tx-${tx.id}`,
+          kind: 'crypto',
+          date: tx.created_at,
+          user_id: tx.user_id,
+          title: `${tx.crypto_type || 'Crypto'} ${normalizeStatus(tx.transaction_type || 'deposit')}`,
+          subtitle: tx.nowpayments_network || tx.payment_provider || 'Crypto deposit',
+          amount: Number(tx.naira_amount || 0),
+          status: tx.status,
+          reference: tx.payment_reference || tx.nowpayments_payment_id,
+          source: 'Crypto deposits',
+          detail: tx.crypto_amount ? `${tx.crypto_amount} ${tx.crypto_type || ''}`.trim() : null,
+          raw: tx,
+        })),
+        ...cryptoWithdrawalRows.map((withdrawal): AdminHistoryRow => ({
+          id: `crypto-withdrawal-${withdrawal.id}`,
+          kind: 'crypto',
+          date: withdrawal.created_at,
+          user_id: withdrawal.user_id,
+          title: `Withdrawal to ${withdrawal.bank_name || 'bank'}`,
+          subtitle: [withdrawal.account_name, withdrawal.account_number].filter(Boolean).join(' • '),
+          amount: Number(withdrawal.amount || 0),
+          status: withdrawal.status,
+          reference: withdrawal.payment_reference || withdrawal.sagecloud_reference,
+          source: 'Crypto withdrawals',
+          detail: withdrawal.net_amount ? `Net ${formatAdminNaira(withdrawal.net_amount)} • Fee ${formatAdminNaira(withdrawal.fee)}` : null,
+          raw: withdrawal,
+        })),
+        ...billsRows.map((bill): AdminHistoryRow => ({
+          id: `bill-${bill.id}`,
+          kind: 'bills',
+          date: bill.created_at,
+          user_id: bill.user_id,
+          title: `${bill.service_provider || 'Bills'} ${normalizeStatus(bill.transaction_type)}`,
+          subtitle: [bill.beneficiary_phone, bill.payment_source].filter(Boolean).join(' • '),
+          amount: Number(bill.amount || 0),
+          status: bill.status,
+          reference: bill.reference || bill.sagecloud_reference,
+          source: 'Bills and airtime',
+          detail: bill.service_code || null,
+          raw: bill,
+        })),
+        ...giftRows.map((gift): AdminHistoryRow => ({
+          id: `gift-${gift.id}`,
+          kind: 'giftcards',
+          date: gift.created_at,
+          user_id: gift.user_id,
+          title: gift.product_name || 'Gift card',
+          subtitle: `${gift.quantity || 1} item${Number(gift.quantity || 1) === 1 ? '' : 's'} • ${gift.payment_source || 'wallet'}`,
+          amount: Number(gift.amount_ngn || 0),
+          status: gift.status,
+          reference: gift.reference || gift.bitrefill_order_id || gift.bitrefill_invoice_id,
+          source: 'Gift cards',
+          detail: gift.status === 'successful' ? 'Redemption delivered' : gift.currency ? `${gift.amount_original || ''} ${gift.currency}`.trim() : null,
+          raw: gift,
+        })),
+        ...socialRows.map((order): AdminHistoryRow => {
+          const service = smmServiceById.get(Number(order.service_id))
+          return {
+            id: `social-${order.id}`,
+            kind: 'social',
+            date: order.created_at,
+            user_id: order.user_id,
+            title: service?.name || `Social service ${order.service_id || ''}`.trim(),
+            subtitle: [service?.platform, `${Number(order.quantity || 0).toLocaleString()} units`, order.link].filter(Boolean).join(' • '),
+            amount: Number(order.amount_ngn || 0),
+            status: order.status,
+            reference: order.reference || order.external_order_id,
+            source: 'Social boost',
+            detail: order.remains != null ? `${Number(order.remains || 0).toLocaleString()} remains` : null,
+            raw: order,
+          }
+        }),
+      ]
+
+      const userIds = Array.from(new Set(rows.map((row) => row.user_id).filter(Boolean))) as string[]
+      const profileMap = new Map<string, { email?: string | null; full_name?: string | null; is_staff?: boolean | null; is_admin?: boolean | null }>()
+
+      for (let i = 0; i < userIds.length; i += 500) {
+        const slice = userIds.slice(i, i + 500)
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('id,email,full_name,is_staff,is_admin')
+          .in('id', slice)
+
+        if (error) {
+          nextErrors.Profiles = error.message
+          continue
+        }
+
+        for (const profile of data || []) {
+          profileMap.set(profile.id, profile)
+        }
+      }
+
+      setHistoryRows(
+        rows
+          .map((row) => {
+            const profile = row.user_id ? profileMap.get(row.user_id) : null
+            return {
+              ...row,
+              user_email: profile?.email || null,
+              user_name: profile?.full_name || null,
+              user_is_staff: profile?.is_staff ?? null,
+              user_is_admin: profile?.is_admin ?? null,
+            }
+          })
+          .sort((a, b) => new Date(b.date || 0).getTime() - new Date(a.date || 0).getTime()),
+      )
+      setHistoryErrors(nextErrors)
+
+      if (Object.keys(nextErrors).length > 0) {
+        toast({
+          title: 'Some histories could not load',
+          description: Object.keys(nextErrors).join(', '),
+          variant: 'destructive',
+        })
+      }
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [categories, productGroups, smmServices, toast])
+
+  const loadFraudReview = useCallback(async () => {
+    setFraudLoading(true)
+    setFraudError(null)
+    setFraudTelemetryError(null)
+    setFraudRows([])
+    setFraudLastLoadedAt(null)
+
+    try {
+      const pageRows: AdminWalletFinancialTruthPageRow[] = []
+      let afterUserId: string | null = null
+      while (true) {
+        const page = await getAdminWalletFinancialTruthPage(afterUserId)
+        if (page.length === 0) break
+        if (page.some((row, index) =>
+          row.user_id <= (index === 0 ? afterUserId || '' : page[index - 1].user_id))) {
+          throw new Error('Canonical wallet financial truth pagination did not advance.')
+        }
+        pageRows.push(...page)
+        afterUserId = page[page.length - 1].user_id
+        if (page.length < 100) break
+      }
+
+      const duplicateRefsByUser = new Map<string, string[]>()
+      const seenPaymentIdentities = new Set<string>()
+      let afterPaymentIdentity: string | null = null
+      while (true) {
+        const page = await getAdminCrossWalletPaymentConflictsPage(afterPaymentIdentity)
+        if (page.length === 0) break
+        for (const conflict of page) {
+          if (seenPaymentIdentities.has(conflict.payment_identity)) {
+            throw new Error('Cross-wallet payment evidence pagination did not advance.')
+          }
+          seenPaymentIdentities.add(conflict.payment_identity)
+          for (const userId of conflict.wallet_ids) {
+            const references = duplicateRefsByUser.get(userId) || []
+            references.push(conflict.payment_identity)
+            duplicateRefsByUser.set(userId, references)
+          }
+        }
+        afterPaymentIdentity = page[page.length - 1].payment_identity
+        if (page.length < 100) break
+      }
+
+      const rows: FraudReviewRow[] = []
+      for (const profile of pageRows) {
+        const truth = profile.truth
+        const duplicateTopupReferences = duplicateRefsByUser.get(profile.user_id) || []
+        const role = profile.is_admin ? 'admin' : profile.is_staff ? 'staff' : 'customer'
+        const netSpend = truth.net_consumed_spend
+        const exposure = Math.max(
+          truth.quarantined_excess,
+          truth.spend_exposure,
+          Math.abs(truth.unexplained_difference),
+          0,
+        )
+        const spendRatio = truth.trusted_principal > 0
+          ? netSpend / truth.trusted_principal
+          : netSpend > 0 ? null : 0
+        const suspended = profile.account_suspended
+        const walletReviewRequired = profile.wallet_review_required
+        const integrityIssue = !truth.evidence_complete || truth.integrity_status !== 'consistent'
+        let reviewType: FraudReviewRow['reviewType'] | null = null
+        let reason = ''
+
+        if (truth.integrity_status === 'payment_identity_conflict') {
+          reviewType = 'duplicate_deposit'
+          reason = 'Payment identity conflict in canonical wallet evidence.'
+        } else if (role === 'customer' && !suspended && !walletReviewRequired &&
+          truth.evidence_complete && truth.integrity_status === 'backed_funds_exhausted' &&
+          truth.duplicate_payment_identities === 0 &&
+          truth.stored_wallet_balance > 0 && truth.confirmed_spendable === 0 &&
+          truth.trusted_available_before_holds === 0 &&
+          truth.authorization_basis === 'verified_gateway_required') {
+          reviewType = 'historical_funding'
+          reason = 'An older recorded balance has no confirmed funding evidence. The account is active; review payment receipts or earlier admin top-ups before approving any historical allowance.'
+        } else if (truth.integrity_status === 'quarantined_excess') {
+          reviewType = 'quarantined_excess'
+          reason = `Displayed wallet exceeds recorded backing by ${formatAdminNaira(truth.quarantined_excess)}. Verify historical funding before deciding on any account action.`
+        } else if (integrityIssue) {
+          reviewType = suspended ? 'suspended_risk' : 'overspent'
+          reason = `Wallet integrity: ${truth.integrity_status.replace(/_/g, ' ')}.`
+        } else if (walletReviewRequired || suspended) {
+          reviewType = 'review_unblock'
+          reason = suspended
+            ? 'Account remains suspended. Review the original reason before unblocking.'
+            : truth.spending_blocked
+              ? 'Wallet spending hold remains. Review the original incident before clearing it.'
+              : 'Wallet review flag remains, but backed funds are spendable up to the confirmed amount. Review the original incident before clearing the flag.'
+        } else if (duplicateTopupReferences.length > 0) {
+          reviewType = 'duplicate_deposit'
+          reason = 'The same external payment identity appears on multiple wallets. Verify provider evidence; this signal alone does not block spending.'
+        } else if (truth.legacy_spend_before_recorded_funding) {
+          reviewType = 'watchlist'
+          reason = 'Historical wallet debit predates the first recorded legacy funding credit. Check payment coverage before drawing a conclusion; this signal alone does not block spending.'
+        } else if (role === 'customer' && truth.trusted_principal > 0 && netSpend >= 250000 &&
+          spendRatio !== null && spendRatio >= 0.98 && truth.stored_wallet_balance <= 1000) {
+          reviewType = 'watchlist'
+          reason = `Watchlist only: customer spent ${Math.round(spendRatio * 100)}% of trusted principal.`
+        }
+
+        if (!reviewType) continue
+        if (truth.confirmed_spendable > Math.max(0, truth.trusted_book_balance)) {
+          reason += ` Legacy purchase policy currently permits ${formatAdminNaira(truth.confirmed_spendable)} despite recorded backing of ${formatAdminNaira(Math.max(0, truth.trusted_book_balance))}.`
+        }
+        if (duplicateTopupReferences.length > 0 && reviewType !== 'duplicate_deposit') {
+          reason += ' Shared external payment identity also needs provider review.'
+        }
+        if (truth.legacy_spend_before_recorded_funding && reviewType !== 'watchlist') {
+          reason += ' A historical debit also predates the first recorded legacy funding credit.'
+        }
+        rows.push({
+          userId: profile.user_id,
+          role,
+          truth,
+          email: profile.email || 'Unknown email',
+          fullName: profile.full_name,
+          walletBalance: truth.stored_wallet_balance,
+          suspended,
+          walletReviewRequired,
+          walletReviewReason: truth.wallet_review_reason || null,
+          suspensionReason: profile.suspension_reason,
+          suspendedAt: profile.suspended_at,
+          trustedCredits: truth.trusted_principal,
+          completedSpend: truth.completed_debits,
+          completedRefunds: truth.completed_refunds,
+          eligibleRefunds: truth.eligible_refunds,
+          trustedAvailable: truth.confirmed_spendable,
+          netSpend,
+          exposure,
+          spendRatio,
+          duplicateTopupReferences,
+          lastIpAddress: null,
+          lastIpSeenAt: null,
+          lastIpLocation: null,
+          lastIpIsp: null,
+          lastUserAgent: null,
+          deviceLabel: null,
+          deviceType: null,
+          deviceOs: null,
+          deviceBrowser: null,
+          ipAddresses: [],
+          reviewType,
+          reason,
+        })
+      }
+
+      try {
+        const telemetry = []
+        for (let offset = 0; offset < rows.length; offset += 100) {
+          telemetry.push(...await getAdminFraudLatestVisits(
+            rows.slice(offset, offset + 100).map((row) => row.userId)
+          ))
+        }
+        const byUser = new Map(telemetry.map((visit) => [visit.user_id, visit]))
+        for (const row of rows) {
+          const visit = byUser.get(row.userId)
+          if (!visit) continue
+          const device = parseAdminUserAgent(visit.user_agent)
+          row.lastIpAddress = visit.ip_address
+          row.lastIpSeenAt = visit.observed_at
+          row.lastIpLocation = formatAdminVisitLocation(visit)
+          row.lastIpIsp = formatAdminVisitIsp(visit)
+          row.lastUserAgent = visit.user_agent
+          row.ipAddresses = visit.ip_addresses
+          row.deviceLabel = device.deviceLabel
+          row.deviceType = device.deviceType
+          row.deviceOs = device.os
+          row.deviceBrowser = device.browser
+        }
+      } catch (error: unknown) {
+        setFraudTelemetryError(error instanceof Error ? error.message : 'IP telemetry unavailable.')
+      }
+
+      const rank: Record<FraudReviewRow['reviewType'], number> = {
+        overspent: 0,
+        suspended_risk: 1,
+        duplicate_deposit: 2,
+        quarantined_excess: 3,
+        review_unblock: 4,
+        historical_funding: 5,
+        watchlist: 6,
+      }
+      setFraudRows(rows.sort((a, b) =>
+        rank[a.reviewType] - rank[b.reviewType] ||
+        Number(b.suspended) - Number(a.suspended) ||
+        b.exposure - a.exposure ||
+        b.netSpend - a.netSpend
+      ))
+      setFraudLastLoadedAt(new Date().toISOString())
+    } catch (error: any) {
+      setFraudError(error?.message || 'Canonical fraud review unavailable')
+      toast({
+        title: 'Fraud review failed',
+        description: error?.message || 'Canonical wallet financial truth could not load.',
+        variant: 'destructive',
+      })
+    } finally {
+      setFraudLoading(false)
+    }
+  }, [toast])
+
+  useEffect(() => {
+    if ((adminTab === 'histories' || adminTab === 'sales') && historyRows.length === 0) {
+      loadAdminHistories()
+    }
+  }, [adminTab, historyRows.length, loadAdminHistories])
+
+  useEffect(() => {
+    if (adminTab === 'fraud' && !fraudInitialScanStartedRef.current) {
+      fraudInitialScanStartedRef.current = true
+      void loadFraudReview()
+    }
+  }, [adminTab, loadFraudReview])
+
+  useEffect(() => {
+    if (adminTab !== 'balance') return
+    let current = true
+    setBalanceLoading(true)
+    setBalanceError(null)
+    void getCustomerBalancePage(balancePage, 50, balanceSort, balanceEmailFilter)
+      .then(({ rows, total }) => {
+        if (!current) return
+        setBalanceRows(rows)
+        setBalanceTotal(total)
+      })
+      .catch((error: unknown) => {
+        if (!current) return
+        setBalanceRows([])
+        setBalanceTotal(0)
+        setBalanceError(error instanceof Error ? error.message : 'Customer balances could not be loaded.')
+      })
+      .finally(() => { if (current) setBalanceLoading(false) })
+    return () => { current = false }
+  }, [adminTab, balancePage, balanceSort, balanceEmailFilter, balanceReload])
+
+  const filteredFraudRows = useMemo(() => {
+    const query = fraudSearchQuery.trim().toLowerCase()
+
+    return fraudRows.filter((row) => {
+      const tabMatches =
+        fraudReviewFilter === 'all' ||
+        (fraudReviewFilter === 'overspent' && row.reviewType === 'overspent') ||
+        (fraudReviewFilter === 'excess' && row.reviewType === 'quarantined_excess') ||
+        (fraudReviewFilter === 'suspended' && (row.reviewType === 'suspended_risk' || row.suspended)) ||
+        (fraudReviewFilter === 'unblock' && row.truth.spending_blocked) ||
+        (fraudReviewFilter === 'review' && row.walletReviewRequired) ||
+        (fraudReviewFilter === 'duplicate' && (row.reviewType === 'duplicate_deposit' || row.duplicateTopupReferences.length > 0)) ||
+        (fraudReviewFilter === 'watchlist' && row.reviewType === 'watchlist') ||
+        (fraudReviewFilter === 'historical' && row.reviewType === 'historical_funding') ||
+        (fraudReviewFilter === 'internal' && row.role !== 'customer')
+
+      if (!tabMatches) return false
+      if (!query) return true
+
+      return [
+        row.email,
+        row.fullName,
+        row.userId,
+        row.role,
+        row.reason,
+        row.suspensionReason,
+        row.lastIpAddress,
+        row.lastIpLocation,
+        row.lastIpIsp,
+        row.deviceLabel,
+        row.deviceType,
+        row.deviceOs,
+        row.deviceBrowser,
+        ...row.ipAddresses,
+        ...row.duplicateTopupReferences,
+      ].some((value) => String(value || '').toLowerCase().includes(query))
+    })
+  }, [fraudReviewFilter, fraudRows, fraudSearchQuery])
+
+  const fraudFilterCounts = useMemo(() => ({
+    all: fraudRows.length,
+    overspent: fraudRows.filter(row => row.reviewType === 'overspent').length,
+    excess: fraudRows.filter(row => row.reviewType === 'quarantined_excess').length,
+    suspended: fraudRows.filter(row => row.reviewType === 'suspended_risk' || row.suspended).length,
+    unblock: fraudRows.filter(row => row.truth.spending_blocked).length,
+    review: fraudRows.filter(row => row.walletReviewRequired).length,
+    duplicate: fraudRows.filter(row => row.reviewType === 'duplicate_deposit' || row.duplicateTopupReferences.length > 0).length,
+    watchlist: fraudRows.filter(row => row.reviewType === 'watchlist').length,
+    historical: fraudRows.filter(row => row.reviewType === 'historical_funding').length,
+    internal: fraudRows.filter(row => row.role !== 'customer').length,
+  }), [fraudRows])
+
+  const loadSalesAnalytics = useCallback(async () => {
+    setSalesLoading(true)
+    const nextErrors: Record<string, string> = {}
+
+    const readRows = async (label: string, table: string, limit = 10000, columns = '*') => {
+      try {
+        const { data, error } = await supabase
+          .from((table === 'transactions' ? 'transactions_retail' : table === 'revenue_events' ? 'revenue_events_retail' : table) as any)
+          .select(columns)
+          .order('created_at', { ascending: false })
+          .limit(limit)
+
+        if (error) throw error
+        return (data || []) as any[]
+      } catch (err: any) {
+        console.warn(`Failed to load ${label}:`, err)
+        nextErrors[label] = err?.message || `Could not load ${label}.`
+        return [] as any[]
+      }
+    }
+
+    try {
+      const [
+        orders,
+        allProfiles,
+        visits,
+        events,
+        decisions,
+        experiments,
+        insights,
+        relationships,
+        qualityRows,
+        featureRows,
+        opportunityRows,
+        forecastRows,
+        evaluationRows,
+        simulationRows,
+        driftRows,
+        modelRows,
+        identityLinks,
+        actionPlanRows,
+        lifecycleActionRows,
+        communicationPreferences,
+        target,
+        smsOrders,
+        automation,
+        croEnabled,
+        croShadowMode,
+        croLevel,
+        croHoldoutPct,
+        croExperimentation,
+        promoMaxDiscountPct,
+        promoMonthlyBudget,
+        maintenanceEnabled,
+        maintenanceLastRunAt,
+        maintenanceLastStatus,
+        maintenanceLastSummary,
+        maintenanceFreezeReason,
+        dormantEmailCohort,
+      ] = await Promise.all([
+        readRows('Orders', 'orders', 10000),
+        readRows('Customers', 'profiles', 10000),
+        readRows('Visitors', 'site_visits', 10000),
+        readRows('Revenue events', 'revenue_events', 10000),
+        readRows('CRO decisions', 'cro_decision_audit', 5000),
+        readRows('CRO experiments', 'cro_experiments', 1000),
+        readRows('CRO insights', 'cro_commercial_insights', 1000),
+        readRows('Product relationships', 'product_relationships', 5000, 'id,created_at'),
+        readRows('Data quality checks', 'revenue_data_quality_checks', 1000),
+        readRows('Feature snapshots', 'revenue_feature_snapshots', 1000),
+        readRows('CRO opportunities', 'cro_opportunities', 1000),
+        readRows('Revenue forecasts', 'revenue_forecasts', 1000),
+        readRows('Experiment evaluations', 'cro_experiment_evaluations', 1000),
+        readRows('Simulation runs', 'cro_simulation_runs', 1000),
+        readRows('Drift checks', 'cro_drift_checks', 1000),
+        readRows('Model registry', 'cro_model_registry', 1000),
+        readRows('Revenue identity links', 'revenue_identity_links', 10000),
+        readRows('CRO action plans', 'cro_action_plans', 1000),
+        readRows('Lifecycle actions', 'cro_lifecycle_actions', 1000),
+        readRows('Communication preferences', 'customer_communication_preferences', 10000),
+        getAppSetting('sales_monthly_target_ngn').catch((err) => {
+          nextErrors.Target = err?.message || 'Could not load sales target.'
+          return null
+        }),
+        readRows('SMS orders', 'sms_orders', 10000, SMS_ORDER_HISTORY_COLUMNS),
+        getAppSetting('sales_recommendation_automation_enabled').catch((err) => {
+          nextErrors.Automation = err?.message || 'Could not load automation setting.'
+          return null
+        }),
+        getAppSetting('cro_global_enabled').catch(() => 'false'),
+        getAppSetting('cro_shadow_mode_enabled').catch(() => 'true'),
+        getAppSetting('cro_autonomy_level').catch(() => '2'),
+        getAppSetting('cro_global_holdout_pct').catch(() => '5'),
+        getAppSetting('cro_experimentation_enabled').catch(() => 'false'),
+        getAppSetting('cro_promotion_max_discount_pct').catch(() => '20'),
+        getAppSetting('cro_promotion_monthly_budget_ngn').catch(() => '0'),
+        getAppSetting('cro_maintenance_enabled').catch(() => 'true'),
+        getAppSetting('cro_maintenance_last_run_at').catch(() => ''),
+        getAppSetting('cro_maintenance_last_status').catch(() => 'never_run'),
+        getAppSetting('cro_maintenance_last_summary').catch(() => '{}'),
+        getAppSetting('cro_maintenance_freeze_reason').catch(() => ''),
+        getAppSetting(DORMANT_EMAIL_SETTING_KEY).catch(() => null),
+      ])
+
+      const orderUserIds = Array.from(new Set([
+        ...orders.map((order) => order.user_id).filter(Boolean),
+        ...smsOrders.map((order) => order.user_id).filter(Boolean),
+      ])) as string[]
+      const profileById = new Map<string, any>((allProfiles || []).map((profile) => [profile.id, profile]))
+
+      for (let i = 0; i < orderUserIds.length; i += 500) {
+        const slice = orderUserIds.slice(i, i + 500)
+        try {
+          const { data, error } = await supabase
+            .from('profiles')
+            .select('id,email,full_name,is_staff,is_admin,created_at')
+            .in('id', slice)
+
+          if (error) throw error
+          for (const profile of data || []) {
+            profileById.set(profile.id, profile)
+          }
+        } catch (err: any) {
+          nextErrors.CustomerProfiles = err?.message || 'Could not load order customer profiles.'
+        }
+      }
+
+      const customerProfiles = Array.from(profileById.values()).filter((profile) =>
+        profile?.id && profile.is_staff !== true && profile.is_admin !== true
+      )
+      const customerProfileIds = new Set(customerProfiles.map((profile) => String(profile.id)))
+      const isActualCustomerUserId = (userId?: string | null) => !!userId && customerProfileIds.has(String(userId))
+      const isNotInternalUserRow = (row: any) => !row?.user_id || isActualCustomerUserId(row.user_id)
+
+      const customerOrders = orders.filter((order) => isActualCustomerUserId(order.user_id))
+      const customerSmsOrders = smsOrders.filter((order) => isActualCustomerUserId(order.user_id))
+      const customerVisits = visits.filter((visit) => isNotInternalUserRow(visit))
+      const customerRevenueEvents = events.filter((event) => isNotInternalUserRow(event))
+      const customerCommunicationPreferences = communicationPreferences.filter((row) => isActualCustomerUserId(row.user_id))
+
+      setSalesOrders(customerOrders)
+      setSalesSmsOrders(customerSmsOrders)
+      setSalesProfiles(customerProfiles)
+      setSalesVisits(customerVisits)
+      setRevenueEvents(customerRevenueEvents)
+      setCroDecisionRows(decisions)
+      setCroExperimentRows(experiments)
+      setCroInsightRows(insights)
+      setCroRelationshipRows(relationships)
+      setRevenueQualityRows(qualityRows)
+      setRevenueFeatureRows(featureRows)
+      setCroOpportunityRows(opportunityRows)
+      setRevenueForecastRows(forecastRows)
+      setCroEvaluationRows(evaluationRows)
+      setCroSimulationRows(simulationRows)
+      setCroDriftRows(driftRows)
+      setCroModelRows(modelRows)
+      setRevenueIdentityLinks(identityLinks)
+      setCroActionPlanRows(actionPlanRows)
+      setCroLifecycleActionRows(lifecycleActionRows)
+      setCommunicationPreferenceRows(customerCommunicationPreferences)
+      setSalesTargetInput(target || '0')
+      setRecommendationAutomationEnabled(automation !== 'false')
+      const activeFreezeReason = String(maintenanceFreezeReason || '').trim()
+      setCroGlobalEnabled(croEnabled !== 'false' && !activeFreezeReason)
+      setCroShadowModeEnabled(croShadowMode === 'true')
+      setCroAutonomyLevel(croLevel || '2')
+      setCroGlobalHoldoutPct(croHoldoutPct || '5')
+      setCroExperimentationEnabled(croExperimentation !== 'false')
+      setPromotionMaxDiscountPct(promoMaxDiscountPct || '20')
+      setPromotionMonthlyBudgetNgn(promoMonthlyBudget || '0')
+      setCroMaintenanceEnabled(maintenanceEnabled !== 'false')
+      setCroMaintenanceLastRunAt(maintenanceLastRunAt || '')
+      setCroMaintenanceLastStatus(maintenanceLastStatus || 'never_run')
+      setCroMaintenanceFreezeReason(activeFreezeReason)
+      try {
+        setCroMaintenanceLastSummary(JSON.parse(maintenanceLastSummary || '{}'))
+      } catch {
+        setCroMaintenanceLastSummary({})
+      }
+      if (dormantEmailCohort) {
+        try {
+          const parsed = JSON.parse(dormantEmailCohort)
+          if (Array.isArray(parsed)) setEmailedDormantCustomers(parsed)
+        } catch {
+          nextErrors.DormantEmails = 'Could not load dormant emailed customer tracking.'
+        }
+      }
+      setSalesErrors(nextErrors)
+    } finally {
+      setSalesLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (adminTab === 'sales' && salesOrders.length === 0) {
+      loadSalesAnalytics()
+    }
+  }, [adminTab, loadSalesAnalytics, salesOrders.length])
 
   // Add new category
   const handleAddCategory = async () => {
@@ -223,8 +3437,9 @@ export default function AdminPage() {
       const success = await deleteIndividualAccount(accountId)
       if (success) {
         setIndividualAccounts(prev => prev.filter(acc => acc.id !== accountId))
+        setIndividualAccountsCount(prev => Math.max(0, prev - 1))
         // Reload product groups to update stock counts
-        const updatedProductGroups = await getAllProductGroups()
+        const updatedProductGroups = await getManagedProductGroups()
         setProductGroups(updatedProductGroups)
         alert('Account deleted successfully!')
       } else {
@@ -270,6 +3485,76 @@ export default function AdminPage() {
     setEditingTemplate(template)
   }
 
+  const handleResetSupplierFallback = async (templateId: string) => {
+    if (!isPartnerOwner || resettingSupplierFallbackId) return
+    setResettingSupplierFallbackId(templateId)
+    try {
+      const { data, error } = await supabase.functions.invoke('supplier-catalog-maintenance', {
+        body: { action: 'reset_fallback', product_group_id: templateId },
+      })
+      let responseCode = data?.code as string | undefined
+      let responseStatus: number | undefined
+      if (error) {
+        const context = (error as { context?: unknown }).context
+        if (context instanceof Response) {
+          responseStatus = context.status
+          const body = await context.clone().json().catch(() => null)
+          responseCode = body?.code || responseCode
+        }
+      }
+      if (error || data?.success !== true) {
+        const reconciliationPending = responseCode === 'SUPPLIER_RECONCILIATION_PENDING' || responseStatus === 409
+        toast({
+          title: reconciliationPending ? 'Supplier order needs review' : 'Supplier fallback could not be retried',
+          description: reconciliationPending
+            ? 'An earlier supplier purchase is still being confirmed. Review that order before retrying this product.'
+            : 'The supplier setting could not be confirmed. Please try again later.',
+          variant: 'destructive',
+        })
+        return
+      }
+
+      const updatedGroups = await getManagedProductGroups()
+      setProductGroups(updatedGroups)
+      setEditingTemplate((current: any) => current?.id === templateId
+        ? updatedGroups.find((group) => group.id === templateId) || current
+        : current)
+      toast({ title: 'Supplier fallback ready to retry', description: 'Availability was refreshed for this product.' })
+    } catch (error) {
+      console.error('Could not reset supplier fallback:', error)
+      toast({
+        title: 'Supplier fallback could not be retried',
+        description: 'The supplier setting could not be confirmed. Please try again later.',
+        variant: 'destructive',
+      })
+    } finally {
+      setResettingSupplierFallbackId(null)
+    }
+  }
+
+  const handleToggleFavoriteTemplate = async (templateId: string) => {
+    const isFavorite = favoriteProductGroupIds.includes(templateId)
+    const nextFavorites = isFavorite
+      ? favoriteProductGroupIds.filter((id) => id !== templateId)
+      : [...favoriteProductGroupIds, templateId]
+
+    const saved = await saveFavoriteProductGroupIds(nextFavorites)
+    if (!saved) {
+      toast({
+        title: 'Favorite not saved',
+        description: 'Could not update the customer recommendation favorite list.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setFavoriteProductGroupIds(nextFavorites)
+    toast({
+      title: isFavorite ? 'Removed from favorites' : 'Added to favorites',
+      description: 'Customer recommendations will mix this setting with top buys and personal history.',
+    })
+  }
+
   // Delete template
   const handleDeleteTemplate = async (templateId: string) => {
     if (!confirm('Are you sure you want to delete this product template? This action cannot be undone.')) return
@@ -278,6 +3563,11 @@ export default function AdminPage() {
       const success = await deleteProductGroup(templateId)
       if (success) {
         setProductGroups(prev => prev.filter(pg => pg.id !== templateId))
+        if (favoriteProductGroupIds.includes(templateId)) {
+          const nextFavorites = favoriteProductGroupIds.filter((id) => id !== templateId)
+          await saveFavoriteProductGroupIds(nextFavorites)
+          setFavoriteProductGroupIds(nextFavorites)
+        }
         alert('Product template deleted successfully!')
       } else {
         alert('Failed to delete product template. This template may have existing orders or accounts associated with it.')
@@ -297,7 +3587,7 @@ export default function AdminPage() {
       const success = await archiveProductGroup(templateId)
       if (success) {
         // Refresh the data to reflect the change
-        const updatedGroups = await getAllProductGroups()
+        const updatedGroups = await getManagedProductGroups()
         setProductGroups(updatedGroups)
         alert('Product template archived successfully!')
       } else {
@@ -317,7 +3607,7 @@ export default function AdminPage() {
       const success = await restoreProductGroup(templateId)
       if (success) {
         // Refresh the data to reflect the change
-        const updatedGroups = await getAllProductGroups()
+        const updatedGroups = await getManagedProductGroups()
         setProductGroups(updatedGroups)
         alert('Product template restored successfully!')
       } else {
@@ -336,7 +3626,18 @@ export default function AdminPage() {
         name: updatedTemplate.name,
         description: updatedTemplate.description,
         price: updatedTemplate.price,
-        category_id: updatedTemplate.category_id
+        category_id: updatedTemplate.category_id,
+        muabanvia_product_id: updatedTemplate.muabanvia_product_id || null,
+        auto_fulfill_enabled: !!updatedTemplate.auto_fulfill_enabled,
+        shopclone_product_id: updatedTemplate.shopclone_product_id || null,
+        shopviaclone_product_id: updatedTemplate.shopviaclone_product_id || null,
+        auto_restock_enabled: !!updatedTemplate.auto_restock_enabled,
+        restock_buffer_days: updatedTemplate.restock_buffer_days || 3,
+        quantity_discount_tiers: Array.isArray(updatedTemplate.quantity_discount_tiers)
+          ? updatedTemplate.quantity_discount_tiers.filter(
+              (t: any) => t && t.min_qty > 0 && t.discount_pct > 0
+            )
+          : []
       })
 
       if (result) {
@@ -355,10 +3656,10 @@ export default function AdminPage() {
     }
   }
 
-  // Handle CSV upload
+  // Handle CSV/TXT upload
   const handleCsvUpload = async () => {
     if (!csvFile) {
-      alert('Please select a CSV file')
+      alert('Please select a CSV or TXT file')
       return
     }
 
@@ -367,17 +3668,29 @@ export default function AdminPage() {
       return
     }
 
+    if (!csvReview || csvReviewLoading || csvUploading) return
+    const summary = csvSkipHeader ? csvReview.withHeader : csvReview.withoutHeader
+    if (summary.sourceRows > MAX_ADMIN_IMPORT_ROWS) {
+      alert(`Upload at most ${MAX_ADMIN_IMPORT_ROWS.toLocaleString()} rows per file.`)
+      return
+    }
+    if (summary.invalidRows > 0 || summary.validRows === 0) {
+      alert('Correct rows missing a login or password before uploading.')
+      return
+    }
+
+    setCsvUploading(true)
     try {
       const text = await csvFile.text()
-      const csvData = parseCSV(text)
+      const lines = getAdminImportLines(text)
+      if (lines.length !== csvReview.nonEmptyRows) throw new Error('File changed during review')
+      const parseInput = csvSkipHeader && !csvReview.requiresCsvHeader ? lines.slice(1).join('\n') : text
+      const csvData = parseCSV(parseInput, csvFormat === 'auto' ? undefined : csvFormat)
 
-      if (csvData.length === 0) {
-        alert('CSV file is empty or invalid')
+      if (csvData.length === 0 || csvData.length !== summary.parsedRows) {
+        alert('File is empty or format not recognised — try selecting the format manually')
         return
       }
-
-      console.log('Processing CSV upload for template:', selectedTemplate)
-      console.log('CSV data sample:', csvData[0])
 
       // Use the new bulk account upload function
       const result = await processBulkAccountUpload(csvData, selectedTemplate)
@@ -395,9 +3708,10 @@ export default function AdminPage() {
         alert(`Upload failed: ${result.error}`)
       }
 
-    } catch (error) {
-      console.error('Error processing CSV:', error)
-      alert('Failed to process CSV file')
+    } catch {
+      alert('Failed to process upload file')
+    } finally {
+      setCsvUploading(false)
     }
   }
 
@@ -439,12 +3753,666 @@ export default function AdminPage() {
   // Calculate stats from real data
   const stats = {
     totalUsers: userCount,
-    totalProducts: individualAccounts.length,
+    totalProducts: individualAccountsCount,
     totalSales: salesStats.totalSales,
     revenue: salesStats.totalRevenue,
-    pendingOrders: 0, // Add order tracking later
-    lowStock: productGroups.filter(pg => pg.stock_count < 5).length
+    lowStock: productGroups.filter(pg => pg.is_active && Number(pg.stock_count || 0) >= 1 && Number(pg.stock_count || 0) <= 3).length
   }
+
+  const historySearchMatches = useCallback((row: AdminHistoryRow, query: string) => {
+    if (!query) return true
+    const haystack = [
+      row.user_email,
+      row.user_name,
+      row.user_id,
+      row.kind,
+      row.source,
+      row.title,
+      row.subtitle,
+      row.status,
+      row.reference,
+      row.detail,
+    ].join(' ').toLowerCase()
+    return haystack.includes(query)
+  }, [])
+
+  const salesFilteredHistoryRows = useMemo(() => {
+    const query = historySearchQuery.trim().toLowerCase()
+    return historyRows
+      .filter((row) => isCustomerHistoryVisible(row))
+      .filter(hasVerifiedCustomerProfile)
+      .filter((row) => historySearchMatches(row, query))
+  }, [historyRows, historySearchMatches, historySearchQuery])
+
+  const depositHistoryRows = useMemo(() => {
+    const query = historySearchQuery.trim().toLowerCase()
+    return historyRows
+      .filter((row) => row.kind === 'deposits')
+      .filter((row) => isCompletedDeposit(row.status))
+      .filter(hasVerifiedCustomerProfile)
+      .filter((row) => historySearchMatches(row, query))
+  }, [historyRows, historySearchMatches, historySearchQuery])
+
+  const filteredHistoryRows = depositHistoryRows
+
+  const revenueCommerceOrders = useMemo(() => {
+    return historyRows
+      .filter((row) => row.kind !== 'deposits')
+      .filter((row) => isCustomerHistoryVisible(row))
+      .filter(hasVerifiedCustomerProfile)
+      .map((row) => {
+        const raw = row.raw || {}
+        const rawQuantity = Number(raw?.account_details?.quantity || raw?.quantity || 1)
+        const quantity = Number.isFinite(rawQuantity) && rawQuantity > 0 ? rawQuantity : 1
+        return {
+          id: row.id,
+          user_id: row.user_id,
+          product_group_id: row.kind === 'products' ? raw.product_group_id || null : null,
+          amount: Number(row.amount || 0),
+          status: row.status,
+          account_details: {
+            ...(raw.account_details || {}),
+            quantity,
+            product_name: row.title,
+            source: row.source,
+          },
+          created_at: row.date,
+          commerce_source: row.kind,
+          reference: row.reference,
+        }
+      })
+  }, [historyRows])
+
+  const historyStats = useMemo(() => {
+    return depositHistoryRows.reduce(
+      (acc, tx) => {
+        const amount = Number(tx.amount || 0)
+        acc.count += 1
+        acc.total += amount
+        acc.byKind[tx.kind] = (acc.byKind[tx.kind] || 0) + 1
+        acc.completedCount += 1
+        acc.completedTotal += amount
+        return acc
+      },
+      {
+        count: 0,
+        total: 0,
+        completedCount: 0,
+        completedTotal: 0,
+        pendingCount: 0,
+        pendingTotal: 0,
+        byKind: {} as Record<string, number>,
+      },
+    )
+  }, [depositHistoryRows])
+
+  const visibleHistorySections = useMemo(() => {
+    const sections: Array<{
+      key: Exclude<AdminHistoryKind, 'all'>
+      title: string
+      description: string
+      icon: ReactNode
+    }> = [
+      { key: 'deposits', title: 'Deposit History', description: 'Completed wallet top-ups and successful deposit records.', icon: <WalletCards className="h-5 w-5" /> },
+      { key: 'products', title: 'Product Order History', description: 'Social account product purchases from the main inventory.', icon: <ShoppingBag className="h-5 w-5" /> },
+      { key: 'sms', title: 'SMS History', description: 'US/Canada SMS number purchases, cancellations, and refunds.', icon: <PhoneCall className="h-5 w-5" /> },
+      { key: 'crypto', title: 'Crypto History', description: 'Crypto sell deposits and crypto balance withdrawals.', icon: <Bitcoin className="h-5 w-5" /> },
+      { key: 'bills', title: 'Bills & Airtime History', description: 'Airtime, data, and Nigerian bill payment records.', icon: <Smartphone className="h-5 w-5" /> },
+      { key: 'giftcards', title: 'Gift Card History', description: 'Gift card purchases and delivery status.', icon: <Gift className="h-5 w-5" /> },
+      { key: 'social', title: 'Social Boost History', description: 'SMM/social boost orders and their latest statuses.', icon: <Megaphone className="h-5 w-5" /> },
+    ]
+
+    return sections.map((section) => ({
+      ...section,
+      rows: salesFilteredHistoryRows.filter((row) => row.kind === section.key),
+      totalRows: historyRows.filter((row) =>
+        row.kind === section.key &&
+        isCustomerHistoryVisible(row) &&
+        hasVerifiedCustomerProfile(row)
+      ).length,
+    }))
+  }, [historyRows, salesFilteredHistoryRows])
+
+  const salesAnalytics = useMemo(() => {
+    const now = new Date()
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+    const weekStart = new Date(now)
+    weekStart.setDate(now.getDate() - 7)
+    const monthStart = new Date(now)
+    monthStart.setDate(now.getDate() - 30)
+    const calendarMonthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+    const previousWeekStart = new Date(now)
+    previousWeekStart.setDate(now.getDate() - 14)
+
+    const productGroupById = new Map(productGroups.map((group) => [group.id, group]))
+    const categoryById = new Map(categories.map((category) => [category.id, category]))
+    const profileById = new Map(salesProfiles.map((profile) => [profile.id, profile]))
+    const isInternalProfile = (profile: any) => !!profile?.is_staff || !!profile?.is_admin
+    const isCustomerProfile = (profile: any) => !!profile && !isInternalProfile(profile)
+    const completedProductOrders = salesOrders
+      .filter((order) => String(order.status || '').toLowerCase() === 'completed')
+      .filter((order) => isCustomerProfile(order.user_id ? profileById.get(order.user_id) : null))
+
+    const getQuantity = (order: any) => {
+      const details = order.account_details || {}
+      const quantity = Number(details.quantity || 1)
+      return Number.isFinite(quantity) && quantity > 0 ? quantity : 1
+    }
+
+    const completedHistorySales = historyRows
+      .filter((row) => row.kind !== 'deposits')
+      .filter((row) => isCustomerHistoryVisible(row))
+      .filter(hasVerifiedCustomerProfile)
+
+    const completedSales = completedHistorySales.length > 0
+      ? completedHistorySales.map((row) => {
+          const raw = row.raw || {}
+          const rawQuantity = Number(raw?.account_details?.quantity || raw?.quantity || 1)
+          const quantity = Number.isFinite(rawQuantity) && rawQuantity > 0 ? rawQuantity : 1
+          const productId = String(raw?.product_group_id || raw?.product_id || raw?.service_id || row.title || row.id)
+          const group = raw?.product_group_id ? productGroupById.get(raw.product_group_id) : null
+          return {
+            id: row.id,
+            created_at: row.date,
+            user_id: row.user_id,
+            amount: Number(row.amount || 0),
+            quantity,
+            productId,
+            productName: row.title || 'Commerce item',
+            categoryName: row.kind === 'products'
+              ? raw?.account_details?.category || (group?.category_id ? categoryById.get(group.category_id)?.name : null) || 'Products'
+              : row.source || row.kind,
+            stock: Number(group?.stock_count || 0),
+            customerEmail: row.user_email || '',
+            customerName: row.user_name || '',
+          }
+        })
+      : completedProductOrders.map((order) => {
+          const details = order.account_details || {}
+          const group = productGroupById.get(order.product_group_id)
+          const profile = profileById.get(order.user_id)
+          return {
+            id: order.id,
+            created_at: order.created_at,
+            user_id: order.user_id,
+            amount: Number(order.amount || 0),
+            quantity: getQuantity(order),
+            productId: order.product_group_id || details.product_name || order.id,
+            productName: details.product_name || group?.name || 'Unknown product',
+            categoryName: details.category || (group?.category_id ? categoryById.get(group.category_id)?.name : null) || 'Uncategorized',
+            stock: Number(group?.stock_count || 0),
+            customerEmail: profile?.email || '',
+            customerName: profile?.full_name || '',
+          }
+        })
+
+    const daily = new Map<string, { date: string; revenue: number; orders: number; units: number }>()
+    const products = new Map<string, { id: string; name: string; category: string; revenue: number; orders: number; units: number; stock: number }>()
+    const customers = new Map<string, { id: string; email: string; name: string; revenue: number; orders: number; units: number; lastOrder: string }>()
+    const categoryTrend = new Map<string, { category: string; recent: number; previous: number; recentUnits: number; previousUnits: number }>()
+
+    for (const order of completedSales) {
+      const createdAt = new Date(order.created_at || '')
+      const day = Number.isNaN(createdAt.getTime()) ? 'Unknown' : format(createdAt, 'yyyy-MM-dd')
+      const amount = Number(order.amount || 0)
+      const units = order.quantity
+
+      const dailyEntry = daily.get(day) || { date: day, revenue: 0, orders: 0, units: 0 }
+      dailyEntry.revenue += amount
+      dailyEntry.orders += 1
+      dailyEntry.units += units
+      daily.set(day, dailyEntry)
+
+      const productEntry = products.get(order.productId) || {
+        id: order.productId,
+        name: order.productName,
+        category: order.categoryName,
+        revenue: 0,
+        orders: 0,
+        units: 0,
+        stock: order.stock,
+      }
+      productEntry.revenue += amount
+      productEntry.orders += 1
+      productEntry.units += units
+      products.set(order.productId, productEntry)
+
+      const profile = profileById.get(order.user_id)
+      const customerEntry = customers.get(order.user_id) || {
+        id: order.user_id,
+        email: order.customerEmail || profile?.email || profile?.full_name || `Customer ${String(order.user_id || '').slice(0, 8)}`,
+        name: order.customerName || profile?.full_name || '',
+        revenue: 0,
+        orders: 0,
+        units: 0,
+        lastOrder: order.created_at,
+      }
+      customerEntry.revenue += amount
+      customerEntry.orders += 1
+      customerEntry.units += units
+      if (new Date(order.created_at).getTime() > new Date(customerEntry.lastOrder).getTime()) {
+        customerEntry.lastOrder = order.created_at
+      }
+      customers.set(order.user_id, customerEntry)
+
+      const trendEntry = categoryTrend.get(order.categoryName) || { category: order.categoryName, recent: 0, previous: 0, recentUnits: 0, previousUnits: 0 }
+      if (createdAt >= weekStart) {
+        trendEntry.recent += amount
+        trendEntry.recentUnits += units
+      } else if (createdAt >= previousWeekStart && createdAt < weekStart) {
+        trendEntry.previous += amount
+        trendEntry.previousUnits += units
+      }
+      categoryTrend.set(order.categoryName, trendEntry)
+    }
+
+    const dailyRows = Array.from(daily.values()).sort((a, b) => b.revenue - a.revenue)
+    const productRows = Array.from(products.values()).sort((a, b) => b.revenue - a.revenue || b.units - a.units)
+    const customerRows = Array.from(customers.values()).sort((a, b) => b.revenue - a.revenue || b.orders - a.orders)
+    const trendRows = Array.from(categoryTrend.values())
+      .map((trend) => ({
+        ...trend,
+        growth: trend.previous > 0 ? ((trend.recent - trend.previous) / trend.previous) * 100 : trend.recent > 0 ? 100 : 0,
+      }))
+      .filter((trend) => trend.recent > 0 || trend.previous > 0)
+      .sort((a, b) => b.growth - a.growth || b.recent - a.recent)
+
+    const countProfilesSince = (date: Date) =>
+      salesProfiles.filter((profile) => !isInternalProfile(profile) && profile.created_at && new Date(profile.created_at) >= date).length
+
+    const trustedVisits = salesVisits.filter((visit) => {
+      const quality = String(visit.traffic_quality || 'human').toLowerCase()
+      if (['bot', 'internal'].includes(quality)) return false
+      const profile = visit.user_id ? profileById.get(visit.user_id) : null
+      return !isInternalProfile(profile)
+    })
+
+    const uniqueVisitorsSince = (date: Date) =>
+      new Set(
+        trustedVisits
+          .filter((visit) => visit.created_at && new Date(visit.created_at) >= date)
+          .map((visit) => visit.visitor_id || visit.user_id || visit.id),
+      ).size
+
+    const visitsSince = (date: Date) =>
+      trustedVisits.filter((visit) => visit.created_at && new Date(visit.created_at) >= date).length
+
+    const trafficQualityCounts = salesVisits.reduce<Record<string, number>>((acc, visit) => {
+      const quality = String(visit.traffic_quality || 'human')
+      acc[quality] = (acc[quality] || 0) + 1
+      return acc
+    }, {})
+
+    const monthlyRevenue = completedSales
+      .filter((order) => order.created_at && new Date(order.created_at) >= calendarMonthStart)
+      .reduce((sum, order) => sum + Number(order.amount || 0), 0)
+    const monthlyTarget = Number(salesTargetInput || 0)
+
+    return {
+      totalRevenue: completedSales.reduce((sum, order) => sum + Number(order.amount || 0), 0),
+      totalOrders: completedSales.length,
+      totalUnits: completedSales.reduce((sum, order) => sum + order.quantity, 0),
+      bestDay: dailyRows[0] || null,
+      bestProduct: productRows[0] || null,
+      highSellingProducts: productRows.slice(0, 8),
+      bestCustomers: customerRows.slice(0, 8),
+      marketTrends: trendRows.slice(0, 8),
+      newCustomers: {
+        today: countProfilesSince(dayStart),
+        week: countProfilesSince(weekStart),
+        month: countProfilesSince(monthStart),
+      },
+      visitors: {
+        today: uniqueVisitorsSince(dayStart),
+        week: uniqueVisitorsSince(weekStart),
+        month: uniqueVisitorsSince(monthStart),
+        visitsToday: visitsSince(dayStart),
+        visitsWeek: visitsSince(weekStart),
+        visitsMonth: visitsSince(monthStart),
+        trafficQualityCounts,
+      },
+      target: {
+        monthlyRevenue,
+        monthlyTarget,
+        progress: monthlyTarget > 0 ? Math.min(100, (monthlyRevenue / monthlyTarget) * 100) : 0,
+        remaining: Math.max(0, monthlyTarget - monthlyRevenue),
+      },
+    }
+  }, [categories, historyRows, productGroups, salesOrders, salesProfiles, salesTargetInput, salesVisits])
+
+  const customerRetentionAnalytics = useMemo(() => {
+    const now = new Date()
+    const dormantCutoff = new Date(now.getTime() - 3 * 86400000)
+    const profileById = new Map(salesProfiles.map((profile) => [String(profile.id), profile]))
+    const customerProfiles = salesProfiles.filter((profile) =>
+      profile?.id &&
+      profile.email &&
+      profile.is_staff !== true &&
+      profile.is_admin !== true
+    )
+    const statsByUser = new Map<string, {
+      totalSpent: number
+      totalDeposited: number
+      orders: number
+      totalUnits: number
+      deposits: number
+      lastPurchaseAt: string | null
+      lastDepositAt: string | null
+      lastVisitAt: string | null
+      lastEventAt: string | null
+      lastActivityAt: string | null
+    }>()
+
+    const ensureStats = (userId: string) => {
+      const existing = statsByUser.get(userId)
+      if (existing) return existing
+      const empty = {
+        totalSpent: 0,
+        totalDeposited: 0,
+        orders: 0,
+        totalUnits: 0,
+        deposits: 0,
+        lastPurchaseAt: null,
+        lastDepositAt: null,
+        lastVisitAt: null,
+        lastEventAt: null,
+        lastActivityAt: null,
+      }
+      statsByUser.set(userId, empty)
+      return empty
+    }
+    const newerDate = (left?: string | null, right?: string | null) => {
+      if (!left) return right || null
+      if (!right) return left
+      return new Date(right).getTime() > new Date(left).getTime() ? right : left
+    }
+    const touch = (userId: string, date?: string | null) => {
+      if (!userId || !date || Number.isNaN(new Date(date).getTime())) return
+      const stats = ensureStats(userId)
+      stats.lastActivityAt = newerDate(stats.lastActivityAt, date)
+    }
+    const getHistoryRowUnits = (row: AdminHistoryRow) => {
+      const raw = row.raw || {}
+      const rawQuantity = Number(raw?.account_details?.quantity || raw?.quantity || 1)
+      return Number.isFinite(rawQuantity) && rawQuantity > 0 ? rawQuantity : 1
+    }
+
+    for (const profile of customerProfiles) {
+      touch(String(profile.id), profile.created_at)
+    }
+    const hasHistoryRows = historyRows.length > 0
+    for (const row of historyRows) {
+      if (!row.user_id || !profileById.has(String(row.user_id)) || !isCustomerHistoryVisible(row)) continue
+      const stats = ensureStats(String(row.user_id))
+      if (row.kind === 'deposits') {
+        stats.totalDeposited += Math.max(0, Number(row.amount || 0))
+        stats.deposits += 1
+        stats.lastDepositAt = newerDate(stats.lastDepositAt, row.date)
+      } else {
+        stats.totalSpent += Math.max(0, Number(row.amount || 0))
+        stats.orders += 1
+        stats.totalUnits += getHistoryRowUnits(row)
+        stats.lastPurchaseAt = newerDate(stats.lastPurchaseAt, row.date)
+      }
+      touch(String(row.user_id), row.date)
+    }
+    for (const order of hasHistoryRows ? [] : salesOrders) {
+      if (!order.user_id || !profileById.has(String(order.user_id)) || String(order.status || '').toLowerCase() !== 'completed') continue
+      const stats = ensureStats(String(order.user_id))
+      const rawQuantity = Number(order?.account_details?.quantity || order?.quantity || 1)
+      stats.totalSpent += Math.max(0, Number(order.amount || 0))
+      stats.orders += 1
+      stats.totalUnits += Number.isFinite(rawQuantity) && rawQuantity > 0 ? rawQuantity : 1
+      stats.lastPurchaseAt = newerDate(stats.lastPurchaseAt, order.created_at)
+      touch(String(order.user_id), order.created_at)
+    }
+    for (const order of hasHistoryRows ? [] : salesSmsOrders) {
+      if (!order.user_id || !profileById.has(String(order.user_id)) || !isPositiveStatus(order.status)) continue
+      const stats = ensureStats(String(order.user_id))
+      stats.totalSpent += Math.max(0, Number(order.amount_ngn || order.total_cost || order.price_ngn || 0))
+      stats.orders += 1
+      stats.totalUnits += 1
+      stats.lastPurchaseAt = newerDate(stats.lastPurchaseAt, order.created_at)
+      touch(String(order.user_id), order.created_at)
+    }
+    for (const visit of salesVisits) {
+      if (!visit.user_id || !profileById.has(String(visit.user_id))) continue
+      const stats = ensureStats(String(visit.user_id))
+      stats.lastVisitAt = newerDate(stats.lastVisitAt, visit.created_at)
+      touch(String(visit.user_id), visit.created_at)
+    }
+    for (const event of revenueEvents) {
+      if (!event.user_id || !profileById.has(String(event.user_id))) continue
+      const stats = ensureStats(String(event.user_id))
+      stats.lastEventAt = newerDate(stats.lastEventAt, event.created_at)
+      touch(String(event.user_id), event.created_at)
+    }
+
+    const dormantCustomers = customerProfiles
+      .map((profile) => {
+        const stats = ensureStats(String(profile.id))
+        const lastActivityAt = stats.lastActivityAt || profile.created_at || null
+        const lastActivityDate = lastActivityAt ? new Date(lastActivityAt) : null
+        const daysInactive = lastActivityDate && !Number.isNaN(lastActivityDate.getTime())
+          ? Math.floor((now.getTime() - lastActivityDate.getTime()) / 86400000)
+          : 999
+        return {
+          id: String(profile.id),
+          email: String(profile.email || ''),
+          name: profile.full_name || '',
+          daysInactive,
+          lastActivityAt,
+          lastPurchaseAt: stats.lastPurchaseAt,
+          lastDepositAt: stats.lastDepositAt,
+          lastVisitAt: stats.lastVisitAt,
+          totalSpent: stats.totalSpent,
+          totalDeposited: stats.totalDeposited,
+          orders: stats.orders,
+          totalUnits: stats.totalUnits,
+          deposits: stats.deposits,
+        }
+      })
+      .filter((customer) => customer.email && customer.daysInactive >= 3)
+      .sort((a, b) => b.daysInactive - a.daysInactive || b.totalSpent - a.totalSpent)
+
+    const liveStatsByUser = statsByUser
+    const emailedCustomers = emailedDormantCustomers
+      .map((record) => {
+        const profile = profileById.get(record.userId)
+        const stats = liveStatsByUser.get(record.userId) || ensureStats(record.userId)
+        const markedAt = new Date(record.markedAt)
+        const happenedAfterEmail = (date?: string | null) =>
+          !!date && !Number.isNaN(markedAt.getTime()) && new Date(date).getTime() > markedAt.getTime()
+        const purchaseRowsAfterEmail = historyRows.filter((row) =>
+          row.user_id === record.userId &&
+          row.kind !== 'deposits' &&
+          isCustomerHistoryVisible(row) &&
+          happenedAfterEmail(row.date)
+        )
+        const depositRowsAfterEmail = historyRows.filter((row) =>
+          row.user_id === record.userId &&
+          row.kind === 'deposits' &&
+          isCustomerHistoryVisible(row) &&
+          happenedAfterEmail(row.date)
+        )
+        const visitsAfterEmail = salesVisits.filter((visit) => visit.user_id === record.userId && happenedAfterEmail(visit.created_at))
+        const eventsAfterEmail = revenueEvents.filter((event) => event.user_id === record.userId && happenedAfterEmail(event.created_at))
+        const spentAfterEmail = purchaseRowsAfterEmail.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0)
+        const unitsAfterEmail = purchaseRowsAfterEmail.reduce((sum, row) => sum + getHistoryRowUnits(row), 0)
+        const depositedAfterEmail = depositRowsAfterEmail.reduce((sum, row) => sum + Math.max(0, Number(row.amount || 0)), 0)
+        const returnedAt = [
+          ...purchaseRowsAfterEmail.map((row) => row.date),
+          ...depositRowsAfterEmail.map((row) => row.date),
+          ...visitsAfterEmail.map((visit) => visit.created_at),
+          ...eventsAfterEmail.map((event) => event.created_at),
+        ].filter(Boolean).sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0] || null
+
+        return {
+          ...record,
+          email: profile?.email || record.email,
+          name: profile?.full_name || '',
+          orders: stats.orders,
+          totalSpent: stats.totalSpent,
+          totalDeposited: stats.totalDeposited,
+          totalUnits: stats.totalUnits,
+          lastPurchaseAt: stats.lastPurchaseAt,
+          spentAfterEmail,
+          unitsAfterEmail,
+          depositedAfterEmail,
+          purchasesAfterEmail: purchaseRowsAfterEmail.length,
+          depositsAfterEmail: depositRowsAfterEmail.length,
+          visitsAfterEmail: visitsAfterEmail.length,
+          eventsAfterEmail: eventsAfterEmail.length,
+          returnedAt,
+          returned: Boolean(returnedAt),
+        }
+      })
+      .sort((a, b) =>
+        b.spentAfterEmail - a.spentAfterEmail ||
+        b.depositedAfterEmail - a.depositedAfterEmail ||
+        Number(b.returned) - Number(a.returned) ||
+        new Date(b.markedAt).getTime() - new Date(a.markedAt).getTime()
+      )
+
+    return {
+      dormantCustomers,
+      emailedCustomers,
+      returnedCustomers: emailedCustomers.filter((customer) => customer.returned),
+      dormantEmailCount: new Set(dormantCustomers.map((customer) => customer.email.toLowerCase())).size,
+      returnedRevenue: emailedCustomers.reduce((sum, customer) => sum + customer.spentAfterEmail, 0),
+      returnedDeposits: emailedCustomers.reduce((sum, customer) => sum + customer.depositedAfterEmail, 0),
+      cutoff: dormantCutoff,
+    }
+  }, [emailedDormantCustomers, historyRows, revenueEvents, salesOrders, salesProfiles, salesSmsOrders, salesVisits])
+
+  const userEmailById = useMemo(() => {
+    return new Map(salesProfiles.map((profile) => [String(profile.id), profile.email || profile.full_name || '']))
+  }, [salesProfiles])
+
+  const communicationPreferenceByUserId = useMemo(() => {
+    return new Map(communicationPreferenceRows.map((row) => [String(row.user_id), row]))
+  }, [communicationPreferenceRows])
+
+  const explicitRelationshipProductOptions = useMemo(() => {
+    return [...productGroups]
+      .filter((product) => product.is_active !== false)
+      .sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')))
+      .slice(0, 500)
+  }, [productGroups])
+
+  const revenueOsHealth = useMemo(() => {
+    const latestByCheck = new Map<string, any>()
+    for (const row of revenueQualityRows) {
+      const key = `${row.check_key || row.checkKey || 'unknown'}:${row.scope || 'global'}`
+      const previous = latestByCheck.get(key)
+      const rowTime = row.created_at ? new Date(row.created_at).getTime() : 0
+      const previousTime = previous?.created_at ? new Date(previous.created_at).getTime() : -1
+      if (!previous || rowTime >= previousTime) latestByCheck.set(key, row)
+    }
+    const latestQualityRows = Array.from(latestByCheck.values())
+    const criticalFailures = latestQualityRows.filter((row) => row.status === 'failed' && row.severity === 'critical')
+    const latestLifecycleSnapshot = revenueFeatureRows.find((row) => row.scope_type === 'store' && row.scope_id === 'customer_lifecycle') || null
+    const latestAnomalies = croDriftRows
+      .filter((row) => String(row.model_key || '').startsWith('anomaly_'))
+      .sort((a, b) => new Date(b.created_at || b.period_end || 0).getTime() - new Date(a.created_at || a.period_end || 0).getTime())
+      .slice(0, 6)
+    const customerLifecycleRows = revenueFeatureRows.filter((row) => row.scope_type === 'customer' && row.features?.lifecycle_stage)
+    const customersWithNextCandidates = customerLifecycleRows.filter((row) => Array.isArray(row.features?.next_purchase_candidates) && row.features.next_purchase_candidates.length > 0).length
+    const attributionRows = revenueFeatureRows
+      .filter((row) => row.scope_type === 'session' && String(row.snapshot_key || '').startsWith('attribution:'))
+      .sort((a, b) => Number(b.features?.visitors || 0) - Number(a.features?.visitors || 0))
+      .slice(0, 6)
+    const sourceEconomicsRows = [...revenueFeatureRows]
+      .filter((row) => row.scope_type === 'session' && String(row.snapshot_key || '').startsWith('attribution:') && Number(row.features?.visitors || 0) >= 1)
+      .sort((a, b) => Number(b.features?.revenue_per_visitor || 0) - Number(a.features?.revenue_per_visitor || 0))
+      .slice(0, 5)
+    const deviceRows = revenueFeatureRows
+      .filter((row) => row.scope_type === 'session' && String(row.snapshot_key || '').startsWith('device:'))
+      .sort((a, b) => Number(b.features?.visitors || 0) - Number(a.features?.visitors || 0))
+      .slice(0, 4)
+    const productIntelligenceRows = [...revenueFeatureRows]
+      .filter((row) => row.scope_type === 'product' && String(row.snapshot_key || '').includes(':30d'))
+      .sort((a, b) => Number(b.features?.revenue || b.features?.revenue_30d || 0) - Number(a.features?.revenue || a.features?.revenue_30d || 0))
+      .slice(0, 8)
+    const promotionFindings = analyzePromotionGuardrails({
+      discountCodes,
+      orders: salesOrders,
+      products: productGroups,
+      revenueEvents,
+      maxDiscountPct: Number(promotionMaxDiscountPct || 20),
+      monthlyBudgetNgn: Number(promotionMonthlyBudgetNgn || 0),
+    })
+    const promotionFailures = promotionFindings.filter((finding) => finding.status === 'failed')
+    const banditRows = revenueFeatureRows
+      .filter((row) => row.scope_type === 'store' && String(row.snapshot_key || '').startsWith('bandit:'))
+      .sort((a, b) => new Date(b.created_at || b.window_end || 0).getTime() - new Date(a.created_at || a.window_end || 0).getTime())
+      .slice(0, 6)
+    const lifecycleActionCounts = croLifecycleActionRows.reduce<Record<string, number>>((acc, row) => {
+      const status = String(row.status || 'unknown')
+      acc[status] = (acc[status] || 0) + 1
+      return acc
+    }, {})
+    const recentDecisionGroups = Object.values(
+      croDecisionRows.slice(0, 40).reduce<Record<string, any>>((acc, row) => {
+        const metadata = row.metadata || {}
+        const action = String(row.selected_action || metadata.nextBestAction || 'DO_NOTHING')
+        const surface = String(row.surface || 'surface')
+        const reason = String(metadata.actionReason || 'highest_scored_action')
+        const key = `${action}:${surface}:${reason}`
+        if (!acc[key]) {
+          acc[key] = { ...row, __groupCount: 0 }
+        }
+        acc[key].__groupCount += 1
+        acc[key].confidence = Math.max(Number(acc[key].confidence || 0), Number(row.confidence || metadata.actionConfidence || 0))
+        return acc
+      }, {}),
+    ).slice(0, 8)
+
+    return {
+      activeExperiments: croExperimentRows.filter((row) => String(row.status || '').toLowerCase() === 'running').length,
+      activeInsights: croInsightRows.filter((row) => String(row.status || '').toLowerCase() === 'active').length,
+      relationships: croRelationshipRows.length,
+      criticalFailures: criticalFailures.length,
+      featureSnapshots: revenueFeatureRows.length,
+      openOpportunities: croOpportunityRows.filter((row) => ['open', 'watching', 'testing'].includes(String(row.status || '').toLowerCase())).length,
+      proposedActionPlans: croActionPlanRows.filter((row) => ['proposed', 'approved', 'running', 'paused'].includes(String(row.status || '').toLowerCase())).length,
+      lifecycleActions: croLifecycleActionRows.length,
+      lifecycleActionCounts,
+      topLifecycleActions: [...croLifecycleActionRows]
+        .filter((row) => ['needs_consent', 'queued', 'approved'].includes(String(row.status || '').toLowerCase()))
+        .sort((a, b) => Number(b.expected_value || 0) - Number(a.expected_value || 0))
+        .slice(0, 6),
+      latestForecast: revenueForecastRows[0] || null,
+      latestSimulation: croSimulationRows[0] || null,
+      latestDrift: croDriftRows[0] || null,
+      latestAnomalies,
+      latestEvaluations: croEvaluationRows.slice(0, 6),
+      modelRegistryCount: croModelRows.length,
+      latestLifecycleSnapshot,
+      lifecycleCounts: latestLifecycleSnapshot?.features?.lifecycle_counts || {},
+      lifecycleCustomerSnapshots: customerLifecycleRows.length,
+      customersWithNextCandidates,
+      attributionRows,
+      sourceEconomicsRows,
+      deviceRows,
+      productIntelligenceRows,
+      banditRows,
+      promotionFindings,
+      promotionFailures,
+      topOpportunities: [...croOpportunityRows]
+        .filter((row) => ['open', 'watching', 'testing'].includes(String(row.status || '').toLowerCase()))
+        .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0))
+        .slice(0, 6),
+      topActionPlans: [...croActionPlanRows]
+        .filter((row) => ['proposed', 'approved', 'running', 'paused'].includes(String(row.status || '').toLowerCase()))
+        .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0))
+        .slice(0, 6),
+      recentQualityRows: revenueQualityRows.slice(0, 8),
+      recentExperiments: croExperimentRows.slice(0, 6),
+      recentInsights: croInsightRows.slice(0, 6),
+      recentDecisions: recentDecisionGroups,
+    }
+  }, [croActionPlanRows, croDecisionRows, croDriftRows, croEvaluationRows, croExperimentRows, croInsightRows, croLifecycleActionRows, croModelRows.length, croOpportunityRows, croRelationshipRows, croSimulationRows, discountCodes, productGroups, promotionMaxDiscountPct, promotionMonthlyBudgetNgn, revenueEvents, revenueFeatureRows, revenueForecastRows, revenueQualityRows, salesOrders])
 
   if (loading) {
     return (
@@ -479,7 +4447,1548 @@ export default function AdminPage() {
 
   const handleCsvFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
+    setCsvReview(null)
     setCsvFile(file || null)
+  }
+
+  // ==================== USER MANAGEMENT HANDLERS ====================
+
+  // Search users
+  const handleSearchUsers = async () => {
+    if (!userSearchQuery.trim()) {
+      toast({
+        title: "Search required",
+        description: "Please enter an email, name, user ID, or account number to search",
+        variant: "destructive"
+      })
+      return
+    }
+
+    try {
+      setIsSearching(true)
+      const results = await searchUsers(userSearchQuery)
+      setUsers(results)
+      toast({
+        title: "Search complete",
+        description: `Found ${results.length} user(s)`
+      })
+    } catch (error: any) {
+      toast({
+        title: "Search failed",
+        description: error.message,
+        variant: "destructive"
+      })
+    } finally {
+      setIsSearching(false)
+    }
+  }
+
+  const loadUserFinancialTruth = (userId: string) => {
+    const truthRequest = ++userFinancialTruthRequestRef.current
+    setUserFinancialTruth(null)
+    setUserFinancialTruthError(null)
+    setUserFinancialTruthLoading(true)
+    void getAdminWalletFinancialTruth(userId)
+      .then((truth) => {
+        if (userFinancialTruthRequestRef.current === truthRequest) setUserFinancialTruth(truth)
+      })
+      .catch((error: unknown) => {
+        if (userFinancialTruthRequestRef.current === truthRequest) {
+          setUserFinancialTruthError(error instanceof Error ? error.message : 'Canonical financial truth unavailable.')
+        }
+      })
+      .finally(() => {
+        if (userFinancialTruthRequestRef.current === truthRequest) setUserFinancialTruthLoading(false)
+      })
+  }
+
+  // View user details
+  const handleViewUser = async (user: any) => {
+    try {
+      setSelectedUser(user)
+      setViewUserOpen(true)
+      setUserTransactions([])
+      setUserOrders([])
+      setUserSecurityEvents([])
+      setUserActivityError(null)
+      setUserActivityWarning(null)
+      setUserActivityLoading(true)
+      loadUserFinancialTruth(user.id)
+      setShowAllUserTransactions(false)
+      setShowAllUserOrders(false)
+      setShowAllUserSecurityEvents(false)
+
+      // Load user transactions, orders, and latest server-captured visit evidence.
+      const [transactions, cryptoTransactions, orders, latestVisitResult, securityEventsResult] = await Promise.all([
+        getUserTransactions(user.id, true),
+        supabase
+          .from('crypto_transactions' as any)
+          .select('*')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(500)
+          .then(({ data, error }) => error ? { data: [], error } : { data: data || [], error: null }),
+        getUserOrdersAdmin(user.id),
+        supabase
+          .from('site_visits' as any)
+          .select('ip_address, user_agent, created_at, ip_source, ip_country_code, ip_country, ip_region, ip_city, ip_timezone, ip_isp, ip_asn, ip_geo_source')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(25)
+          .then(({ data, error }) => error ? { data: [], error } : { data: data || [], error: null }),
+        supabase
+          .from('wallet_security_events' as any)
+          .select('id, created_at, event_type, severity, source, route, db_function, request_id, idempotency_key, operation_reference, actor_user_id, actor_role, ip_address, user_agent, device_fingerprint, financial_snapshot, result, denial_code, metadata')
+          .or(`profile_id.eq.${user.id},wallet_user_id.eq.${user.id}`)
+          .order('created_at', { ascending: false })
+          .limit(100)
+          .then(({ data, error }) => error ? { data: [], error } : { data: data || [], error: null })
+      ])
+
+      if (cryptoTransactions.error) {
+        setUserActivityWarning('Crypto history could not be loaded; wallet transactions are still shown.')
+      }
+      const visits = latestVisitResult.data || []
+      const latestServerVisit = visits.find((visit: any) => visit.ip_address && visit.ip_source === 'edge') || visits.find((visit: any) => visit.ip_address) || visits[0]
+      const deviceInfo = parseAdminUserAgent(latestServerVisit?.user_agent || user.fraud_last_user_agent)
+      const ipAddresses = Array.from(new Set([
+        ...(Array.isArray(user.fraud_ip_addresses) ? user.fraud_ip_addresses : []),
+        ...visits.map((visit: any) => String(visit.ip_address || '').trim()).filter(Boolean),
+      ])).slice(0, 8)
+
+      setSelectedUser({
+        ...user,
+        fraud_last_ip_address: user.fraud_last_ip_address || latestServerVisit?.ip_address || '',
+        fraud_ip_addresses: ipAddresses,
+        fraud_last_ip_seen_at: user.fraud_last_ip_seen_at || latestServerVisit?.created_at || '',
+        fraud_last_ip_location: user.fraud_last_ip_location || formatAdminVisitLocation(latestServerVisit) || '',
+        fraud_last_ip_isp: user.fraud_last_ip_isp || formatAdminVisitIsp(latestServerVisit) || '',
+        fraud_last_user_agent: user.fraud_last_user_agent || latestServerVisit?.user_agent || '',
+        fraud_device_label: user.fraud_device_label || deviceInfo.deviceLabel,
+        fraud_device_type: user.fraud_device_type || deviceInfo.deviceType,
+        fraud_device_os: user.fraud_device_os || deviceInfo.os,
+        fraud_device_browser: user.fraud_device_browser || deviceInfo.browser,
+      })
+      const cryptoLedgerRows = (cryptoTransactions.data || []).map((tx: any) => ({
+        id: `crypto-${tx.id}`,
+        created_at: tx.created_at,
+        type: tx.credited_at ? 'crypto_credit' : (tx.transaction_type || 'crypto'),
+        status: tx.status,
+        description: `${tx.crypto_type || 'Crypto'} sell ${tx.credited_at ? 'credited' : normalizeStatus(tx.status || 'pending')}`,
+        amount: Number(tx.naira_amount || 0),
+        reference: tx.payment_reference || tx.nowpayments_payment_id || '',
+        payment_reference: tx.payment_reference || tx.nowpayments_payment_id || '',
+        credited_at: tx.credited_at || null,
+        transaction_type: tx.transaction_type || null,
+        naira_amount: Number(tx.naira_amount || 0),
+        balance_type: 'crypto_activity',
+      }))
+      setUserTransactions([...transactions, ...cryptoLedgerRows].sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()))
+      setUserOrders(orders)
+      setUserSecurityEvents(securityEventsResult.data || [])
+      setViewUserOpen(true)
+    } catch (error: any) {
+      setUserActivityError(error?.message || 'User activity could not be loaded.')
+      toast({
+        title: "Error loading user details",
+        description: error.message,
+        variant: "destructive"
+      })
+    } finally {
+      setUserActivityLoading(false)
+    }
+  }
+
+  // Open balance adjustment modal
+  const handleAdjustBalance = (user: any) => {
+    if (user?.is_staff || user?.is_admin) {
+      toast({
+        title: 'Customer account required',
+        description: 'Balance adjustments are only available for customer accounts.',
+        variant: 'destructive',
+      })
+      return
+    }
+    setSelectedUser(user)
+    setAdjustmentAmount('')
+    setAdjustmentReason('')
+    setAdjustmentReference('')
+    setAdjustmentType('add')
+    setLedgerOnlyCredit(true)
+    setAdjustBalanceOpen(true)
+  }
+
+  const handleRecoverErcasPayment = async () => {
+    const target = selectedUser
+    const reference = recoverReference.trim()
+    const reason = recoverReason.trim()
+    if (!target?.id || target.is_admin || target.is_staff) {
+      toast({ title: 'Customer account required', variant: 'destructive' })
+      return
+    }
+    if (reference.length < 8 || reason.length < 10) {
+      toast({
+        title: 'Payment details required',
+        description: 'Enter the Ercas transaction reference and a specific support reason.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setRecoverBusy(true)
+    try {
+      const result = await adminRecoverErcasPayment(target.id, reference, reason)
+      if (!result.success) {
+        toast({
+          title: result.status === 'pending' ? 'Payment not confirmed yet' : 'Recovery did not credit the wallet',
+          description: result.error || 'The provider has not confirmed this payment.',
+          variant: result.status === 'pending' ? 'default' : 'destructive',
+        })
+        return
+      }
+
+      if (typeof result.newBalance === 'number') {
+        setUsers(prev => prev.map(customer => customer.id === target.id
+          ? { ...customer, wallet_balance: result.newBalance }
+          : customer))
+        setSelectedUser((current: any) => current?.id === target.id
+          ? { ...current, wallet_balance: result.newBalance }
+          : current)
+      }
+      toast({
+        title: result.alreadyProcessed ? 'Payment already credited' : 'Verified payment recovered',
+        description: result.alreadyProcessed
+          ? 'The wallet already contains this Ercas payment.'
+          : `Ercas confirmed ₦${Number(result.amount || 0).toLocaleString()} for this customer. The payment was credited once.`,
+      })
+      if (!result.auditOutcomeRecorded) {
+        toast({
+          title: 'Check recovery audit',
+          description: 'The payment request was recorded, but the result audit needs review.',
+          variant: 'destructive',
+        })
+      }
+      setRecoverPaymentOpen(false)
+      setRecoverReference('')
+      setRecoverReason('')
+    } catch (error) {
+      toast({
+        title: 'Recovery failed',
+        description: error instanceof Error ? error.message : 'Could not check this Ercas payment.',
+        variant: 'destructive',
+      })
+    } finally {
+      setRecoverBusy(false)
+    }
+  }
+
+  // Submit balance adjustment
+  const handleSubmitAdjustment = async () => {
+    const cleanReason = adjustmentReason.trim()
+    if (!adjustmentAmount || !cleanReason || !selectedUser) {
+      toast({
+        title: "Validation error",
+        description: "Please fill in all fields",
+        variant: "destructive"
+      })
+      return
+    }
+
+    if (cleanReason.length < 3) {
+      toast({
+        title: "Reason too short",
+        description: "Enter at least 3 characters so the adjustment has an audit note.",
+        variant: "destructive"
+      })
+      return
+    }
+
+    const amount = parseFloat(adjustmentAmount)
+    if (isNaN(amount) || amount === 0) {
+      toast({
+        title: "Invalid amount",
+        description: "Please enter a valid amount",
+        variant: "destructive"
+      })
+      return
+    }
+
+    if (selectedUser.is_staff || selectedUser.is_admin) {
+      toast({
+        title: 'Customer account required',
+        description: 'Balance adjustments are only available for customer accounts.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (ledgerOnlyCredit && adjustmentType !== 'add') {
+      toast({
+        title: 'Credit repair only',
+        description: 'Ledger repair records missing credits only. Use deduct funds or record chargeback to debit a balance.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (adjustmentType === 'add' && !ledgerOnlyCredit) {
+      toast({
+        title: 'Verified payment required',
+        description: 'New wallet funds can only come from a verified Ercas or PocketFi payment.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (adjustmentType === 'chargeback' && adjustmentReference.trim().length < 3) {
+      toast({
+        title: 'Chargeback reference required',
+        description: 'Enter the payment, dispute, or provider reversal reference for duplicate protection.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    // Calculate actual adjustment (negative for deduction)
+    const adjustment = adjustmentType === 'add' ? amount : -amount
+
+    try {
+      setIsAdjusting(true)
+
+      if (ledgerOnlyCredit) {
+        const result = await adminRecordLedgerCredit(selectedUser.id, amount, cleanReason)
+
+        if (result.success) {
+          if (result.transaction) {
+            setUserTransactions(prev => [result.transaction, ...prev])
+          }
+
+          toast({
+            title: 'Historical ledger note recorded',
+            description: `Recorded ₦${amount.toLocaleString()} for investigation only. Wallet balance and trusted spendable funds were not changed.`,
+          })
+
+          setAdjustBalanceOpen(false)
+          setAdjustmentAmount('')
+          setAdjustmentReason('')
+          setAdjustmentReference('')
+          setLedgerOnlyCredit(false)
+          return
+        }
+      }
+
+      if (adjustmentType === 'chargeback') {
+        const result = await adminRecordChargeback(selectedUser.id, amount, cleanReason, adjustmentReference.trim())
+
+        if (result.success) {
+          if (result.transaction) {
+            setUserTransactions(prev => [result.transaction, ...prev])
+          }
+
+          setUsers(prev => prev.map(u =>
+            u.id === selectedUser.id
+              ? { ...u, wallet_balance: result.newBalance ?? u.wallet_balance, account_suspended: true }
+              : u
+          ))
+
+          toast({
+            title: 'Chargeback recorded',
+            description: `Recorded ₦${amount.toLocaleString()} reversal and placed the account into review.`,
+          })
+
+          setAdjustBalanceOpen(false)
+          setAdjustmentAmount('')
+          setAdjustmentReason('')
+          setAdjustmentReference('')
+          setLedgerOnlyCredit(false)
+          setSelectedUser(null)
+          return
+        }
+      }
+
+      const result = await adminAdjustBalance(
+        selectedUser.id,
+        adjustment,
+        cleanReason,
+        user?.email || 'admin'
+      )
+
+      if (result.success) {
+        // Update local user list
+        setUsers(prev => prev.map(u => 
+          u.id === selectedUser.id 
+            ? { ...u, wallet_balance: result.newBalance }
+            : u
+        ))
+
+        toast({
+          title: "Balance adjusted successfully!",
+          description: `New balance: ₦${result.newBalance.toLocaleString()}`
+        })
+
+        // Close modal and reset
+        setAdjustBalanceOpen(false)
+        setAdjustmentAmount('')
+        setAdjustmentReason('')
+        setAdjustmentReference('')
+        setLedgerOnlyCredit(false)
+        setSelectedUser(null)
+      }
+    } catch (error: any) {
+      toast({
+        title: "Adjustment failed",
+        description: error.message,
+        variant: "destructive"
+      })
+    } finally {
+      setIsAdjusting(false)
+    }
+  }
+
+  const handleUnsuspendSelectedUser = async () => {
+    if (!selectedUser) return
+    try {
+      setIsUnsuspendingUser(true)
+      await adminUnsuspendUser(selectedUser.id)
+
+      const nextUser = {
+        ...selectedUser,
+        account_suspended: false,
+        suspension_reason: null,
+        suspension_reinstated_at: new Date().toISOString(),
+      }
+      setSelectedUser(nextUser)
+      setUsers(prev => prev.map(u => u.id === selectedUser.id ? nextUser : u))
+      if (viewUserOpen) loadUserFinancialTruth(selectedUser.id)
+
+      toast({
+        title: 'Account unsuspended',
+        description: `${selectedUser.email || 'Customer'} account suspension was cleared. Wallet review and confirmed funds still govern purchases.`,
+      })
+    } catch (error: any) {
+      toast({
+        title: 'Unsuspend failed',
+        description: error.message || 'Could not unsuspend this account',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsUnsuspendingUser(false)
+    }
+  }
+
+  const handleConfirmSuspendUser = async () => {
+    const target = suspensionTarget
+    const reason = suspensionReason.trim()
+    if (!target || reason.length < 20 || !suspensionEvidenceReviewed) return
+    try {
+      setIsSuspendingUser(true)
+      await adminSuspendUser(target.id, reason, suspensionEvidenceReviewed)
+
+      await loadFraudReview()
+      setUsers(prev => prev.map(u => u.id === target.id ? { ...u, account_suspended: true, suspension_reason: reason, suspended_at: new Date().toISOString() } : u))
+      if (selectedUser?.id === target.id) {
+        setSelectedUser((prev: any) => prev ? { ...prev, account_suspended: true, suspension_reason: reason, suspended_at: new Date().toISOString() } : prev)
+        if (viewUserOpen) loadUserFinancialTruth(target.id)
+      }
+      setSuspensionTarget(null)
+      setSuspensionReason('')
+      setSuspensionEvidenceReviewed(false)
+
+      toast({
+        title: 'Account suspended',
+        description: `${target.email} cannot purchase now.`,
+      })
+    } catch (error: any) {
+      toast({
+        title: 'Suspend failed',
+        description: error.message || 'Could not suspend this account',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSuspendingUser(false)
+    }
+  }
+
+  const handleUnsuspendFraudUser = async (row: FraudReviewRow) => {
+    try {
+      setFraudUnsuspendingUserId(row.userId)
+      await adminUnsuspendUser(row.userId)
+
+      await loadFraudReview()
+      setUsers(prev => prev.map(u => u.id === row.userId ? { ...u, account_suspended: false, suspension_reason: null } : u))
+      if (selectedUser?.id === row.userId) {
+        setSelectedUser((prev: any) => prev ? { ...prev, account_suspended: false, suspension_reason: null } : prev)
+        if (viewUserOpen) loadUserFinancialTruth(row.userId)
+      }
+
+      toast({
+        title: 'Account unsuspended',
+        description: `${row.email} account suspension was cleared. Wallet review and confirmed funds still govern purchases.`,
+      })
+    } catch (error: any) {
+      toast({
+        title: 'Unsuspend failed',
+        description: error.message || 'Could not unsuspend this account',
+        variant: 'destructive',
+      })
+    } finally {
+      setFraudUnsuspendingUserId(null)
+    }
+  }
+
+  // Calculate new balance preview
+  const calculateNewBalance = () => {
+    if (!selectedUser || !adjustmentAmount) return '0'
+    const current = selectedUser.wallet_balance || 0
+    const amount = parseFloat(adjustmentAmount) || 0
+    const adjustment = adjustmentType === 'add' ? amount : -amount
+    return (current + adjustment).toLocaleString()
+  }
+
+  const exportHistoryRows = () => {
+    const exportRows = adminTab === 'sales' ? salesFilteredHistoryRows : filteredHistoryRows
+    const rows = [
+      ['Date', 'History', 'Source', 'User', 'User ID', 'Item', 'Details', 'Amount', 'Status', 'Reference'],
+      ...exportRows.map((row) => [
+        row.date ? format(new Date(row.date), 'yyyy-MM-dd HH:mm:ss') : '',
+        row.kind,
+        row.source,
+        row.user_email || row.user_name || 'Unknown user',
+        row.user_id || '',
+        row.title || '',
+        [row.subtitle, row.detail].filter(Boolean).join(' | '),
+        String(row.amount || 0),
+        row.status || '',
+        row.reference || '',
+      ]),
+    ]
+
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `tallystore-${adminTab === 'sales' ? 'sales-histories' : 'transaction-history'}-${format(new Date(), 'yyyy-MM-dd')}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const downloadCsvFile = (rows: Array<Array<string | number | null | undefined>>, filename: string) => {
+    const csv = rows
+      .map((row) => row.map((cell) => {
+        const value = String(cell ?? '')
+        return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+      }).join(','))
+      .join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = filename
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const safeCsvFilenamePart = (value?: string | null) => {
+    return String(value || 'user')
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'user'
+  }
+
+  const downloadSelectedUserHistoryCsv = () => {
+    if (!selectedUser) return
+
+    const accountStatus = selectedUser.account_suspended
+      ? 'suspended'
+      : selectedUser.is_admin
+        ? 'admin'
+        : selectedUser.is_staff
+          ? 'staff'
+          : 'customer'
+
+    const rows: Array<Array<string | number | null | undefined>> = [
+      [
+        'section',
+        'user_id',
+        'email',
+        'full_name',
+        'wallet_balance',
+        'account_status',
+        'record_id',
+        'date',
+        'record_type',
+        'status',
+        'description',
+        'amount',
+        'reference',
+        'product',
+        'category',
+        'quantity',
+        'last_ip_address',
+        'ip_addresses',
+        'last_ip_seen_at',
+        'last_ip_location',
+        'last_ip_isp',
+        'device_label',
+        'device_type',
+        'device_os',
+        'device_browser',
+        'last_user_agent',
+        'suspension_reason',
+        'wallet_effect',
+      ],
+      [
+        'account',
+        selectedUser.id,
+        selectedUser.email,
+        selectedUser.full_name || '',
+        Number(selectedUser.wallet_balance || 0),
+        accountStatus,
+        '',
+        formatCustomerCsvDate(selectedUser.created_at),
+        'profile',
+        accountStatus,
+        'Account summary',
+        '',
+        '',
+        '',
+        '',
+        '',
+        selectedUser.fraud_last_ip_address || '',
+        Array.isArray(selectedUser.fraud_ip_addresses) ? selectedUser.fraud_ip_addresses.join(' | ') : '',
+        formatCustomerCsvDate(selectedUser.fraud_last_ip_seen_at),
+        selectedUser.fraud_last_ip_location || '',
+        selectedUser.fraud_last_ip_isp || '',
+        selectedUser.fraud_device_label || '',
+        selectedUser.fraud_device_type || '',
+        selectedUser.fraud_device_os || '',
+        selectedUser.fraud_device_browser || '',
+        selectedUser.fraud_last_user_agent || '',
+        selectedUser.suspension_reason || '',
+        '',
+      ],
+      ...userSecurityEvents.map((event) => [
+        'security_event',
+        selectedUser.id,
+        selectedUser.email,
+        selectedUser.full_name || '',
+        Number(selectedUser.wallet_balance || 0),
+        accountStatus,
+        event.id || '',
+        formatCustomerCsvDate(event.created_at),
+        event.event_type || '',
+        event.result || event.severity || '',
+        [
+          event.denial_code ? `Denial: ${event.denial_code}` : '',
+          event.db_function ? `DB: ${event.db_function}` : '',
+          event.route ? `Route: ${event.route}` : '',
+          event.operation_reference ? `Ref: ${event.operation_reference}` : '',
+        ].filter(Boolean).join(' | '),
+        '',
+        event.request_id || event.idempotency_key || event.operation_reference || '',
+        '',
+        '',
+        '',
+        event.ip_address || selectedUser.fraud_last_ip_address || '',
+        Array.isArray(selectedUser.fraud_ip_addresses) ? selectedUser.fraud_ip_addresses.join(' | ') : '',
+        formatCustomerCsvDate(selectedUser.fraud_last_ip_seen_at),
+        selectedUser.fraud_last_ip_location || '',
+        selectedUser.fraud_last_ip_isp || '',
+        selectedUser.fraud_device_label || '',
+        selectedUser.fraud_device_type || '',
+        selectedUser.fraud_device_os || '',
+        selectedUser.fraud_device_browser || '',
+        event.user_agent || selectedUser.fraud_last_user_agent || '',
+        selectedUser.suspension_reason || '',
+        '',
+      ]),
+      ...userTransactions.map((tx) => [
+        'transaction',
+        selectedUser.id,
+        selectedUser.email,
+        selectedUser.full_name || '',
+        Number(selectedUser.wallet_balance || 0),
+        accountStatus,
+        tx.id || '',
+        formatCustomerCsvDate(tx.created_at),
+        tx.type || '',
+        tx.status || '',
+        tx.description || '',
+        Number(tx.amount || 0),
+        tx.reference || tx.payment_reference || tx.transaction_reference || '',
+        '',
+        '',
+        '',
+        selectedUser.fraud_last_ip_address || '',
+        Array.isArray(selectedUser.fraud_ip_addresses) ? selectedUser.fraud_ip_addresses.join(' | ') : '',
+        formatCustomerCsvDate(selectedUser.fraud_last_ip_seen_at),
+        selectedUser.fraud_last_ip_location || '',
+        selectedUser.fraud_last_ip_isp || '',
+        selectedUser.fraud_device_label || '',
+        selectedUser.fraud_device_type || '',
+        selectedUser.fraud_device_os || '',
+        selectedUser.fraud_device_browser || '',
+        selectedUser.fraud_last_user_agent || '',
+        selectedUser.suspension_reason || '',
+        tx.balance_type && tx.balance_type !== 'wallet' ? '' : getWalletTransactionDisplayAmount(tx),
+      ]),
+      ...userOrders.map((order) => [
+        'order',
+        selectedUser.id,
+        selectedUser.email,
+        selectedUser.full_name || '',
+        Number(selectedUser.wallet_balance || 0),
+        accountStatus,
+        order.id || '',
+        formatCustomerCsvDate(order.created_at),
+        'order',
+        order.status || '',
+        order.product_groups?.name || order.product_name || 'Unknown product',
+        Number(order.amount || 0),
+        order.reference || order.payment_reference || '',
+        order.product_groups?.name || order.product_name || 'Unknown product',
+        order.product_groups?.categories?.name || '',
+        Number(order.quantity || order.units || 1),
+        selectedUser.fraud_last_ip_address || '',
+        Array.isArray(selectedUser.fraud_ip_addresses) ? selectedUser.fraud_ip_addresses.join(' | ') : '',
+        formatCustomerCsvDate(selectedUser.fraud_last_ip_seen_at),
+        selectedUser.fraud_last_ip_location || '',
+        selectedUser.fraud_last_ip_isp || '',
+        selectedUser.fraud_device_label || '',
+        selectedUser.fraud_device_type || '',
+        selectedUser.fraud_device_os || '',
+        selectedUser.fraud_device_browser || '',
+        selectedUser.fraud_last_user_agent || '',
+        selectedUser.suspension_reason || '',
+        '',
+      ]),
+    ]
+
+    downloadCsvFile(
+      rows,
+      `tallystore-user-history-${safeCsvFilenamePart(selectedUser.email || selectedUser.id)}-${format(new Date(), 'yyyy-MM-dd')}.csv`,
+    )
+    toast({
+      title: 'User history CSV downloaded',
+      description: `${userTransactions.length.toLocaleString()} transaction(s), ${userOrders.length.toLocaleString()} order(s), and ${userSecurityEvents.length.toLocaleString()} security event(s) exported.`,
+    })
+  }
+
+  const formatCustomerCsvDate = (date?: string | null) => {
+    if (!date) return ''
+    const parsed = new Date(date)
+    return Number.isNaN(parsed.getTime()) ? '' : format(parsed, 'yyyy-MM-dd HH:mm:ss')
+  }
+
+  const buildDormantCustomerCsvRows = (customers = customerRetentionAnalytics.dormantCustomers) => [
+    [
+      'email',
+      'last_order_date',
+      'total_orders',
+      'total_units',
+      'total_spent',
+      'last_activity_date',
+      'days_inactive',
+      'total_deposits',
+      'deposit_count',
+    ],
+    ...customers.map((customer) => [
+      customer.email,
+      formatCustomerCsvDate(customer.lastPurchaseAt),
+      customer.orders,
+      customer.totalUnits,
+      customer.totalSpent,
+      formatCustomerCsvDate(customer.lastActivityAt),
+      customer.daysInactive,
+      customer.totalDeposited,
+      customer.deposits,
+    ]),
+  ]
+
+  const buildEmailedCustomerCsvRows = (customers = customerRetentionAnalytics.emailedCustomers) => [
+    [
+      'email',
+      'last_order_date',
+      'total_orders',
+      'total_units',
+      'total_spent',
+      'emailed_at',
+      'returned',
+      'returned_at',
+      'spent_after_email',
+      'orders_after_email',
+      'units_after_email',
+      'deposited_after_email',
+      'deposits_after_email',
+      'activity_after_email',
+    ],
+    ...customers.map((customer) => [
+      customer.email,
+      formatCustomerCsvDate(customer.lastPurchaseAt),
+      customer.orders,
+      customer.totalUnits,
+      customer.totalSpent,
+      formatCustomerCsvDate(customer.markedAt),
+      customer.returned ? 'yes' : 'no',
+      formatCustomerCsvDate(customer.returnedAt),
+      customer.spentAfterEmail,
+      customer.purchasesAfterEmail,
+      customer.unitsAfterEmail,
+      customer.depositedAfterEmail,
+      customer.depositsAfterEmail,
+      customer.visitsAfterEmail + customer.eventsAfterEmail,
+    ]),
+  ]
+
+  const persistEmailedDormantCustomers = async (records: EmailedDormantCustomer[]) => {
+    const saved = await upsertAppSetting(DORMANT_EMAIL_SETTING_KEY, JSON.stringify(records))
+    if (!saved) throw new Error('Could not save emailed customer tracking.')
+  }
+
+  const buildEmailedDormantCustomerRecords = (
+    previous: EmailedDormantCustomer[],
+    customers = customerRetentionAnalytics.dormantCustomers,
+  ) => {
+    const markedAt = new Date().toISOString()
+    const byUser = new Map(previous.map((customer) => [customer.userId, customer]))
+    for (const customer of customers) {
+      byUser.set(customer.id, {
+        userId: customer.id,
+        email: customer.email,
+        markedAt,
+        lastActivityAt: customer.lastActivityAt,
+        spentBeforeEmail: customer.totalSpent,
+      })
+    }
+    return Array.from(byUser.values()).sort((a, b) => new Date(b.markedAt).getTime() - new Date(a.markedAt).getTime())
+  }
+
+  const markDormantCustomersAsEmailed = async (customers = customerRetentionAnalytics.dormantCustomers) => {
+    if (customers.length === 0) return
+    const nextRecords = buildEmailedDormantCustomerRecords(emailedDormantCustomers, customers)
+    setEmailedDormantCustomers(nextRecords)
+    await persistEmailedDormantCustomers(nextRecords)
+  }
+
+  const downloadDormantCustomerEmails = async () => {
+    const customers = customerRetentionAnalytics.dormantCustomers
+    if (customers.length === 0) {
+      toast({ title: 'No dormant customers', description: 'No customer has been inactive for 3+ days right now.' })
+      return
+    }
+
+    downloadCsvFile(
+      buildDormantCustomerCsvRows(customers),
+      `tallystore-dormant-customers-3-days-${format(new Date(), 'yyyy-MM-dd')}.csv`,
+    )
+    try {
+      await markDormantCustomersAsEmailed(customers)
+      toast({
+        title: 'Dormant customer CSV downloaded',
+        description: `${customers.length.toLocaleString()} customer(s) saved and marked as emailed.`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Customer CSV downloaded',
+        description: err?.message || 'Downloaded, but tracking could not be saved.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const downloadEmailedCustomerCsv = () => {
+    const customers = customerRetentionAnalytics.emailedCustomers
+    if (customers.length === 0) {
+      toast({ title: 'No emailed customers', description: 'Nobody has been marked emailed yet.' })
+      return
+    }
+    downloadCsvFile(
+      buildEmailedCustomerCsvRows(customers),
+      `tallystore-emailed-customers-return-tracking-${format(new Date(), 'yyyy-MM-dd')}.csv`,
+    )
+    toast({
+      title: 'Emailed customer CSV downloaded',
+      description: `${customers.length.toLocaleString()} tracked customer(s) exported.`,
+    })
+  }
+
+  const handleMarkAllDormantEmailed = async () => {
+    const customers = customerRetentionAnalytics.dormantCustomers
+    if (customers.length === 0) {
+      toast({ title: 'No dormant customers', description: 'There is nobody to mark as emailed right now.' })
+      return
+    }
+    try {
+      await markDormantCustomersAsEmailed(customers)
+      toast({
+        title: 'All dormant customers marked emailed',
+        description: `${customers.length.toLocaleString()} customer(s) moved into the emailed tracking section.`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Could not save emailed tracking',
+        description: err?.message || 'Please try again.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const clearEmailedDormantCustomers = async () => {
+    setEmailedDormantCustomers([])
+    try {
+      await persistEmailedDormantCustomers([])
+      toast({ title: 'Emailed tracking cleared' })
+    } catch (err: any) {
+      toast({
+        title: 'Tracking cleared locally',
+        description: err?.message || 'Could not clear the saved setting.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const handleSaveSalesTarget = async () => {
+    const target = Number(salesTargetInput)
+    if (!Number.isFinite(target) || target < 0) {
+      toast({ title: 'Invalid target', description: 'Enter a valid monthly sales target.', variant: 'destructive' })
+      return
+    }
+
+    setSalesTargetSaving(true)
+    try {
+      const ok = await upsertAppSetting('sales_monthly_target_ngn', String(Math.round(target)))
+      if (!ok) throw new Error('Could not save sales target')
+      toast({ title: 'Sales target saved', description: `Monthly target set to ${formatAdminNaira(target)}.` })
+    } catch (err: any) {
+      toast({ title: 'Failed to save target', description: err?.message || 'Please try again.', variant: 'destructive' })
+    } finally {
+      setSalesTargetSaving(false)
+    }
+  }
+
+  const handleToggleRecommendationAutomation = async (enabled: boolean) => {
+    setRecommendationAutomationSaving(true)
+    try {
+      const ok = await upsertAppSetting('sales_recommendation_automation_enabled', enabled ? 'true' : 'false')
+      if (!ok) throw new Error('Could not save automation setting')
+      setRecommendationAutomationEnabled(enabled)
+      toast({
+        title: enabled ? 'Recommendation automation enabled' : 'Recommendation automation disabled',
+        description: enabled
+          ? 'Customer product ordering will prioritize likely buys and trending products.'
+          : 'Customer product ordering will stop using sales-based ranking.',
+      })
+    } catch (err: any) {
+      toast({ title: 'Failed to save automation', description: err?.message || 'Please try again.', variant: 'destructive' })
+    } finally {
+      setRecommendationAutomationSaving(false)
+    }
+  }
+
+  const handleSaveCroControls = async () => {
+    const autonomy = Math.min(8, Math.max(0, Math.round(Number(croAutonomyLevel || 0))))
+    const holdoutPct = Math.min(50, Math.max(0, Number(croGlobalHoldoutPct || 0)))
+    if (!Number.isFinite(holdoutPct)) {
+      toast({ title: 'Invalid holdout', description: 'Enter a holdout percentage from 0 to 50.', variant: 'destructive' })
+      return
+    }
+    const activeFreezeReason = croMaintenanceFreezeReason.trim()
+    if (croGlobalEnabled && activeFreezeReason) {
+      setCroGlobalEnabled(false)
+      toast({
+        title: 'Revenue OS is frozen',
+        description: `Clear the freeze reason first: ${activeFreezeReason}`,
+        variant: 'destructive',
+      })
+      return
+    }
+    setCroControlSaving(true)
+    try {
+      const results = await Promise.all([
+        upsertAppSetting('cro_global_enabled', croGlobalEnabled ? 'true' : 'false'),
+        upsertAppSetting('cro_shadow_mode_enabled', croShadowModeEnabled ? 'true' : 'false'),
+        upsertAppSetting('cro_autonomy_level', String(autonomy)),
+        upsertAppSetting('cro_global_holdout_pct', String(holdoutPct)),
+        upsertAppSetting('cro_experimentation_enabled', croExperimentationEnabled ? 'true' : 'false'),
+      ])
+      if (results.some((ok) => !ok)) throw new Error('Could not save one or more CRO controls')
+      setCroAutonomyLevel(String(autonomy))
+      setCroGlobalHoldoutPct(String(holdoutPct))
+      toast({
+        title: 'Revenue OS controls saved',
+        description: croGlobalEnabled
+          ? `CRO is active at autonomy level ${autonomy}${croShadowModeEnabled ? ' in shadow mode' : ''} with ${holdoutPct}% holdout.`
+          : 'All CRO actions are paused. The store will keep using safe default ranking.',
+      })
+    } catch (err: any) {
+      toast({ title: 'Failed to save CRO controls', description: err?.message || 'Please try again.', variant: 'destructive' })
+    } finally {
+      setCroControlSaving(false)
+    }
+  }
+
+  const handleToggleCroMaintenance = async (enabled: boolean) => {
+    setCroMaintenanceSaving(true)
+    try {
+      const ok = await upsertAppSetting('cro_maintenance_enabled', enabled ? 'true' : 'false')
+      if (!ok) throw new Error('Could not save maintenance setting')
+      setCroMaintenanceEnabled(enabled)
+      toast({
+        title: enabled ? 'Scheduled Revenue OS enabled' : 'Scheduled Revenue OS paused',
+        description: enabled
+          ? 'The hourly maintenance job can refresh intelligence and freeze CRO on critical data issues.'
+          : 'Manual scans still work, but the scheduled Revenue OS job will skip runs.',
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Maintenance setting failed',
+        description: err?.message || 'Please try again.',
+        variant: 'destructive',
+      })
+    } finally {
+      setCroMaintenanceSaving(false)
+    }
+  }
+
+  const handleRunCroMaintenanceNow = async () => {
+    setCroMaintenanceRunning(true)
+    try {
+      const { data, error } = await supabase.functions.invoke('revenue-os-maintenance', {
+        body: { source: 'admin_manual_run' },
+      })
+      if (error) throw new Error(await getEdgeFunctionErrorMessage(error, 'Could not run Revenue OS maintenance.'))
+      if (data?.success === false) throw new Error(data?.error || 'Maintenance failed')
+      const summary = data?.summary || {}
+      const freezeReason = String(summary.freeze_reason || '').trim()
+      const pausedByMaintenance = summary.simulation_recommendation === 'pause' || !!freezeReason
+      setCroMaintenanceLastRunAt(new Date().toISOString())
+      setCroMaintenanceLastStatus(pausedByMaintenance ? 'paused_cro' : data?.skipped ? 'skipped_disabled' : 'ok')
+      setCroMaintenanceLastSummary(summary)
+      setCroMaintenanceFreezeReason(freezeReason)
+      if (pausedByMaintenance) {
+        setCroGlobalEnabled(false)
+      }
+      await loadSalesAnalytics()
+      toast({
+        title: pausedByMaintenance ? 'Maintenance paused CRO' : data?.skipped ? 'Maintenance skipped' : 'Maintenance complete',
+        description: data?.skipped
+          ? 'Scheduled Revenue OS maintenance is disabled.'
+          : `${Number(summary.findings || 0).toLocaleString()} finding(s), ${Number(summary.opportunities || 0).toLocaleString()} opportunity item(s), ${Number(summary.action_plans || 0).toLocaleString()} action plan(s).`,
+        variant: pausedByMaintenance ? 'destructive' : 'default',
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Maintenance run failed',
+        description: err?.message || 'Could not run Revenue OS maintenance.',
+        variant: 'destructive',
+      })
+    } finally {
+      setCroMaintenanceRunning(false)
+    }
+  }
+
+  const handleRunRevenueDataQualityScan = async () => {
+    setDataQualityScanning(true)
+    try {
+      const serviceOrdersForQuality = buildServiceOrdersFromHistory(historyRows)
+      const findings = [
+        ...analyzeRevenueDataQuality(productGroups, categories),
+        ...analyzeRevenueEventDataQuality({
+          revenueEvents,
+          orders: salesOrders,
+          smsOrders: salesSmsOrders,
+          serviceOrders: serviceOrdersForQuality,
+          products: productGroups,
+          profiles: salesProfiles,
+          identityLinks: revenueIdentityLinks,
+        }),
+      ]
+      await recordRevenueDataQualityFindings(findings)
+      setRevenueQualityRows((previous) => [
+        ...findings.map((finding) => ({
+          check_key: finding.checkKey,
+          severity: finding.severity,
+          status: finding.status,
+          scope: finding.scope,
+          message: finding.message,
+          evidence: finding.evidence || {},
+          created_at: new Date().toISOString(),
+        })),
+        ...previous,
+      ])
+
+      const criticalFailures = findings.filter((finding) => finding.status === 'failed' && finding.severity === 'critical')
+      if (criticalFailures.length > 0) {
+        const freezeReason = `${criticalFailures.length} critical manual data-quality issue(s)`
+        await upsertAppSetting('cro_global_enabled', 'false')
+        await upsertAppSetting('cro_maintenance_freeze_reason', freezeReason)
+        setCroGlobalEnabled(false)
+        setCroMaintenanceFreezeReason(freezeReason)
+        toast({
+          title: 'Revenue OS paused',
+          description: `${criticalFailures.length} critical data issue(s) found. Customer buying still works with safe default ranking.`,
+          variant: 'destructive',
+        })
+      } else {
+        if (croMaintenanceFreezeReason.startsWith('manual data-quality clear:') || croMaintenanceFreezeReason.includes('critical manual data-quality issue')) {
+          await upsertAppSetting('cro_maintenance_freeze_reason', '')
+          setCroMaintenanceFreezeReason('')
+        }
+        toast({
+          title: 'Data quality scan complete',
+          description: findings.some((finding) => finding.status === 'failed')
+            ? 'No critical issues found. Review warnings before increasing autonomy.'
+            : 'Catalogue, event, order, payment, and traffic checks passed.',
+        })
+      }
+    } catch (err: any) {
+      toast({
+        title: 'Data quality scan failed',
+        description: err?.message || 'Could not record scan results.',
+        variant: 'destructive',
+      })
+    } finally {
+      setDataQualityScanning(false)
+    }
+  }
+
+  const handleRebuildProductGraph = async () => {
+    setProductGraphBuilding(true)
+    try {
+      const catalogueRelationships = deriveCatalogueProductRelationships(productGroups, categories)
+      const behavioralRelationships = deriveBehavioralProductRelationships(revenueEvents, productGroups, {
+        orders: salesOrders,
+        smsOrders: salesSmsOrders,
+      })
+      const relationships = [...catalogueRelationships, ...behavioralRelationships]
+      const attributes = deriveRevenueProductAttributes(productGroups, categories)
+      await recordRevenueProductAttributes(attributes)
+      await recordCatalogueProductRelationships(relationships)
+      await loadSalesAnalytics()
+      toast({
+        title: 'Product graph rebuilt',
+        description: relationships.length > 0
+          ? `${attributes.length.toLocaleString()} attribute value(s), ${catalogueRelationships.length.toLocaleString()} catalogue, and ${behavioralRelationships.length.toLocaleString()} behavioral relationship(s) were saved from live sellable products.`
+          : `${attributes.length.toLocaleString()} attribute value(s) saved. No eligible product relationships were found yet.`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Product graph rebuild failed',
+        description: err?.message || 'Could not save product relationships.',
+        variant: 'destructive',
+      })
+    } finally {
+      setProductGraphBuilding(false)
+    }
+  }
+
+  const handleSaveExplicitProductRelationship = async () => {
+    const fromProductId = explicitRelationshipDraft.fromProductId
+    const toProductId = explicitRelationshipDraft.toProductId
+    const relationshipType = explicitRelationshipDraft.relationshipType
+    const strength = Math.min(1, Math.max(0.05, Number(explicitRelationshipDraft.strength || 1)))
+
+    if (!fromProductId || !toProductId) {
+      toast({
+        title: 'Choose both products',
+        description: 'Explicit Revenue OS relationships need a source product and a target product.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    if (fromProductId === toProductId) {
+      toast({
+        title: 'Relationship not saved',
+        description: 'A product cannot point to itself in the product graph.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setExplicitRelationshipSaving(true)
+    try {
+      const fromProduct = productGroups.find((product) => product.id === fromProductId)
+      const toProduct = productGroups.find((product) => product.id === toProductId)
+      const { error } = await supabase.rpc('save_admin_product_relationships', { p_rows: [{
+        from_product_group_id: fromProductId,
+        to_product_group_id: toProductId,
+        relationship_type: relationshipType,
+        strength,
+        confidence: 1,
+        sample_size: 1,
+        source: 'EXPLICIT',
+        metadata: {
+          owner_defined: true,
+          created_by: user?.id || null,
+          from_product_name: fromProduct?.name || null,
+          to_product_name: toProduct?.name || null,
+          note: 'Admin-defined relationship. Revenue OS should not infer or overwrite this as behavioural evidence.',
+        },
+      }] })
+
+      if (error) throw error
+      await loadSalesAnalytics()
+      toast({
+        title: 'Explicit relationship saved',
+        description: `${fromProduct?.name || 'Product'} now has a ${relationshipType.replace(/_/g, ' ').toLowerCase()} edge to ${toProduct?.name || 'Product'}.`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Relationship save failed',
+        description: err?.message || 'Could not save the explicit product graph edge.',
+        variant: 'destructive',
+      })
+    } finally {
+      setExplicitRelationshipSaving(false)
+    }
+  }
+
+  const handleRefreshRuntimeIntelligence = async () => {
+    setRuntimeIntelligenceRefreshing(true)
+    try {
+      const intelligence = deriveRevenueOsRuntimeIntelligence({
+        orders: salesOrders,
+        commerceOrders: revenueCommerceOrders.length > 0 ? revenueCommerceOrders : undefined,
+        revenueEvents,
+        products: productGroups,
+        categories,
+        profiles: salesProfiles,
+        identityLinks: revenueIdentityLinks,
+        monthlyTarget: Number(salesTargetInput || 0),
+      })
+
+      await recordRevenueOsRuntimeIntelligence(intelligence)
+      const actionPlans = deriveCroActionPlans(intelligence.opportunities)
+      await recordCroActionPlans(actionPlans)
+      const decayedInsights = await decayCommercialInsights(croInsightRows)
+      await loadSalesAnalytics()
+      toast({
+        title: 'Revenue intelligence refreshed',
+        description: `${intelligence.featureSnapshots.length.toLocaleString()} feature snapshot(s), ${intelligence.opportunities.length.toLocaleString()} opportunity item(s), ${actionPlans.length.toLocaleString()} action plan(s), ${intelligence.forecasts.length.toLocaleString()} forecast(s), and ${decayedInsights.length.toLocaleString()} memory update(s) recorded.`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Revenue intelligence failed',
+        description: err?.message || 'Could not save Revenue OS runtime intelligence.',
+        variant: 'destructive',
+      })
+    } finally {
+      setRuntimeIntelligenceRefreshing(false)
+    }
+  }
+
+  const handleUpdateCroActionPlanStatus = async (plan: any, nextStatus: 'approved' | 'running' | 'paused' | 'completed' | 'rejected') => {
+    const planKey = String(plan.id || plan.action_key || plan.actionKey)
+    const currentStatus = String(plan.status || 'proposed').toLowerCase()
+    const safeToAutoRun = plan.guardrails?.safe_to_auto_run === true
+
+    if (nextStatus === 'running') {
+      if (!croGlobalEnabled) {
+        toast({
+          title: 'Revenue OS is paused',
+          description: 'Enable Revenue OS controls before running action plans.',
+          variant: 'destructive',
+        })
+        return
+      }
+      if (!safeToAutoRun && currentStatus !== 'approved' && currentStatus !== 'paused') {
+        toast({
+          title: 'Approval required',
+          description: 'Approve this bounded action before it can affect customer placement.',
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+
+    setCroActionPlanUpdatingKey(planKey)
+    try {
+      await updateCroActionPlanStatus({
+        id: plan.id || null,
+        actionKey: plan.action_key || plan.actionKey || null,
+        status: nextStatus,
+        reviewerId: user?.id || null,
+        reason: `admin_${nextStatus}`,
+      })
+      setCroActionPlanRows((previous) => previous.map((row) => (
+        (row.id && row.id === plan.id) || (row.action_key && row.action_key === plan.action_key)
+          ? {
+              ...row,
+              status: nextStatus,
+              updated_at: new Date().toISOString(),
+            }
+          : row
+      )))
+      toast({
+        title: `Action plan ${nextStatus}`,
+        description: nextStatus === 'running'
+          ? 'This plan can now influence eligible customer surfaces.'
+          : 'Revenue OS action plan status updated.',
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Action plan update failed',
+        description: err?.message || 'Could not update this action plan.',
+        variant: 'destructive',
+      })
+    } finally {
+      setCroActionPlanUpdatingKey(null)
+    }
+  }
+
+  const handleLifecycleActionStatus = async (action: any, nextStatus: 'approved' | 'dismissed' | 'expired' | 'failed') => {
+    const actionKey = String(action.id || action.action_key)
+    const prefs = communicationPreferenceByUserId.get(String(action.user_id))
+    if (nextStatus === 'approved' && action.channel === 'email' && prefs?.email_lifecycle_opt_in !== true) {
+      toast({
+        title: 'Consent required',
+        description: 'This customer has not opted in to lifecycle follow-up emails.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setLifecycleActionUpdatingKey(actionKey)
+    try {
+      const { error } = await supabase
+        .from('cro_lifecycle_actions' as any)
+        .update({
+          status: nextStatus,
+          updated_at: new Date().toISOString(),
+          evidence: {
+            ...(action.evidence || {}),
+            last_status_changed_at: new Date().toISOString(),
+            last_status_changed_by: user?.id || null,
+            last_status_change_reason: `admin_${nextStatus}`,
+          },
+        })
+        .eq('id', action.id)
+      if (error) throw error
+      setCroLifecycleActionRows((previous) => previous.map((row) => row.id === action.id ? { ...row, status: nextStatus, updated_at: new Date().toISOString() } : row))
+      toast({ title: `Lifecycle action ${nextStatus}`, description: 'The lifecycle queue was updated.' })
+    } catch (err: any) {
+      toast({
+        title: 'Lifecycle update failed',
+        description: err?.message || 'Could not update lifecycle action.',
+        variant: 'destructive',
+      })
+    } finally {
+      setLifecycleActionUpdatingKey(null)
+    }
+  }
+
+  const handleSendLifecycleAction = async (action: any) => {
+    const actionKey = String(action.id || action.action_key)
+    const prefs = communicationPreferenceByUserId.get(String(action.user_id))
+    const to = userEmailById.get(String(action.user_id))
+    if (action.status !== 'approved') {
+      toast({ title: 'Approve first', description: 'Only approved lifecycle actions can be sent.', variant: 'destructive' })
+      return
+    }
+    if (action.channel !== 'email' || prefs?.email_lifecycle_opt_in !== true) {
+      toast({ title: 'Consent required', description: 'The customer must opt in to lifecycle emails before sending.', variant: 'destructive' })
+      return
+    }
+    if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(to))) {
+      toast({ title: 'Missing customer email', description: 'This action has no valid customer email.', variant: 'destructive' })
+      return
+    }
+    const recentSent = croLifecycleActionRows.find((row) => {
+      if (row.id === action.id || String(row.user_id) !== String(action.user_id)) return false
+      if (String(row.status || '').toLowerCase() !== 'sent') return false
+      const sentAt = new Date(String(row.evidence?.sent_at || row.updated_at || row.created_at || ''))
+      return Number.isFinite(sentAt.getTime()) && Date.now() - sentAt.getTime() <= 14 * 86400000
+    })
+    if (recentSent) {
+      toast({
+        title: 'Frequency cap active',
+        description: 'This customer already received a lifecycle email in the last 14 days.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setLifecycleActionUpdatingKey(actionKey)
+    try {
+      const actionLabel = String(action.recommended_action || 'follow-up').replace(/_/g, ' ').toLowerCase()
+      const product = productGroups.find((group) => group.id === action.product_group_id)
+      const message = [
+        `Hi, this is a TallyStore follow-up based on your account activity.`,
+        product ? `You may want to check ${product.name}.` : `We found a relevant ${actionLabel} for your account.`,
+        `This message was only sent because lifecycle follow-up emails are enabled in your profile preferences.`,
+        `You can turn follow-up emails off anytime from your TallyStore profile.`,
+      ].join('\n\n')
+      const html = buildEmailHtml(message)
+      const { data, error } = await supabase.functions.invoke('email/send', {
+        body: {
+          to,
+          subject: 'TallyStore follow-up',
+          html,
+        },
+      })
+      if (error || data?.success === false) throw new Error(data?.error || error?.message || 'Email failed')
+      const { error: updateError } = await supabase
+        .from('cro_lifecycle_actions' as any)
+        .update({
+          status: 'sent',
+          updated_at: new Date().toISOString(),
+          evidence: {
+            ...(action.evidence || {}),
+            sent_at: new Date().toISOString(),
+            sent_by: user?.id || null,
+            sent_to: to,
+          },
+        })
+        .eq('id', action.id)
+      if (updateError) throw updateError
+      setCroLifecycleActionRows((previous) => previous.map((row) => row.id === action.id ? { ...row, status: 'sent', updated_at: new Date().toISOString() } : row))
+      toast({ title: 'Lifecycle email sent', description: `Sent to ${to}.` })
+    } catch (err: any) {
+      toast({
+        title: 'Lifecycle send failed',
+        description: err?.message || 'Could not send lifecycle email.',
+        variant: 'destructive',
+      })
+    } finally {
+      setLifecycleActionUpdatingKey(null)
+    }
+  }
+
+  const handleCreateExperimentFromOpportunity = async (opportunity: any) => {
+    const key = opportunity.opportunity_key || opportunity.id
+    setExperimentCreatingKey(key)
+    try {
+      const experiment = createProductRankingExperimentFromOpportunity(opportunity)
+      await recordCroExperiment(experiment)
+      await loadSalesAnalytics()
+      toast({
+        title: 'Draft experiment created',
+        description: `${experiment.experiment_key} is ready for review. Set it to running when you want assignment to begin.`,
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Experiment could not be created',
+        description: err?.message || 'Please try again.',
+        variant: 'destructive',
+      })
+    } finally {
+      setExperimentCreatingKey(null)
+    }
+  }
+
+  const handleRunRevenueEvaluation = async () => {
+    setEvaluationRunning(true)
+    try {
+      const serviceOrdersForEvaluation = buildServiceOrdersFromHistory(historyRows)
+      const evaluations = deriveCroExperimentEvaluations({
+        experiments: croExperimentRows,
+        revenueEvents,
+        orders: salesOrders,
+        smsOrders: salesSmsOrders,
+        serviceOrders: serviceOrdersForEvaluation,
+      })
+      const simulation = deriveCroSimulationRun({
+        decisionRows: croDecisionRows,
+        products: productGroups,
+      })
+      const banditAllocations = deriveCroBanditAllocations({
+        experiments: croExperimentRows,
+        revenueEvents,
+        orders: salesOrders,
+        smsOrders: salesSmsOrders,
+        serviceOrders: serviceOrdersForEvaluation,
+        minExplorationPct: 0.08,
+      })
+      const driftChecks = deriveCroDriftChecks(revenueFeatureRows)
+      const anomalyChecks = deriveRevenueAnomalyChecks({
+        featureRows: revenueFeatureRows,
+        revenueEvents,
+        orders: salesOrders,
+        commerceOrders: revenueCommerceOrders.length > 0 ? revenueCommerceOrders : undefined,
+        profiles: salesProfiles,
+      })
+      const allDriftChecks = [...driftChecks, ...anomalyChecks]
+      await recordCroEvaluations({ evaluations, simulation, driftChecks: allDriftChecks })
+      if (banditAllocations.length > 0) {
+        await recordRevenueOsRuntimeIntelligence({
+          featureSnapshots: banditAllocations.map((allocation) => ({
+            snapshotKey: allocation.snapshotKey,
+            scopeType: 'store',
+            scopeId: `bandit:${allocation.experimentKey}`,
+            windowStart: null,
+            windowEnd: new Date().toISOString(),
+            features: {
+              experiment_key: allocation.experimentKey,
+              surface: allocation.surface,
+              recommendation: allocation.recommendation,
+              allocation: allocation.allocation,
+              evidence: allocation.evidence,
+            },
+          })),
+          opportunities: [],
+          insights: [],
+          forecasts: [],
+        })
+      }
+      const appliedDecisions = await applyCroEvaluationDecisions(evaluations)
+      const promotionFindings = analyzePromotionGuardrails({
+        discountCodes,
+        orders: salesOrders,
+        products: productGroups,
+        revenueEvents,
+        maxDiscountPct: Number(promotionMaxDiscountPct || 20),
+        monthlyBudgetNgn: Number(promotionMonthlyBudgetNgn || 0),
+      })
+      const criticalPromotionFailures = promotionFindings.filter((finding) => finding.status === 'failed' && finding.severity === 'critical')
+      const severeAnomalyFailures = anomalyChecks.filter((check) => check.status === 'drift' && check.driftScore >= 0.5)
+      const severeDriftFailures = driftChecks.filter((check) => check.status === 'drift' && check.driftScore >= 0.45)
+      await seedDeterministicRevenueOsModelRegistry({
+        enabled: croGlobalEnabled,
+        shadowMode: croShadowModeEnabled,
+        autonomyLevel: Math.min(8, Math.max(0, Math.round(Number(croAutonomyLevel || 0)))),
+        explorationPct: 0.05,
+        pressureLimit: 3,
+        globalHoldoutPct: Math.min(50, Math.max(0, Number(croGlobalHoldoutPct || 0))) / 100,
+        experimentationEnabled: croExperimentationEnabled,
+      })
+
+      const shouldPauseCro = simulation.recommendation === 'pause' || criticalPromotionFailures.length > 0 || severeAnomalyFailures.length > 0 || severeDriftFailures.length > 0
+      const pauseReason = simulation.recommendation === 'pause'
+        ? 'audited decisions'
+        : criticalPromotionFailures.length > 0
+          ? 'promotion settings'
+          : severeAnomalyFailures.length > 0
+            ? 'revenue anomalies'
+            : 'model drift'
+
+      if (shouldPauseCro) {
+        const freezeReason = `manual evaluation guardrail: ${pauseReason}`
+        await upsertAppSetting('cro_global_enabled', 'false')
+        await upsertAppSetting('cro_maintenance_freeze_reason', freezeReason)
+        setCroGlobalEnabled(false)
+        setCroMaintenanceFreezeReason(freezeReason)
+      }
+
+      await loadSalesAnalytics()
+      toast({
+        title: shouldPauseCro ? 'Evaluation found guardrail risk' : 'Revenue OS evaluation complete',
+        description: shouldPauseCro
+          ? `CRO has been paused because ${pauseReason} violated guardrails.`
+          : `${evaluations.length.toLocaleString()} experiment evaluation(s), ${banditAllocations.length.toLocaleString()} bandit allocation(s), 1 simulation, ${allDriftChecks.length.toLocaleString()} drift/anomaly check(s). Applied ${appliedDecisions.promoted} promotion(s), ${appliedDecisions.rolledBack} rollback(s), ${appliedDecisions.paused} pause(s).`,
+        variant: shouldPauseCro ? 'destructive' : 'default',
+      })
+    } catch (err: any) {
+      toast({
+        title: 'Evaluation failed',
+        description: err?.message || 'Could not save Revenue OS evaluation results.',
+        variant: 'destructive',
+      })
+    } finally {
+      setEvaluationRunning(false)
+    }
   }
 
   const handleAddProduct = async () => {
@@ -537,10 +6046,10 @@ export default function AdminPage() {
       const createdAccount = await createIndividualAccount(accountData)
       
       if (createdAccount) {
-        setIndividualAccounts(prev => [...prev, createdAccount])
+        setIndividualAccountsCount(prev => prev + 1)
         
         // Reload product groups to get updated stock counts
-        const updatedProductGroups = await getAllProductGroups()
+        const updatedProductGroups = await getManagedProductGroups()
         setProductGroups(updatedProductGroups)
         
         // Reset form
@@ -564,26 +6073,402 @@ export default function AdminPage() {
     }
   }
 
+  const selectedCsvSummary = csvReview ? (csvSkipHeader ? csvReview.withHeader : csvReview.withoutHeader) : null
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-muted/20">
       <Navbar />
       
-      <div className="container mx-auto px-6 py-8">
-        <div className="max-w-7xl mx-auto">
-          {/* Header */}
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold mb-2">Admin Dashboard</h1>
-            <p className="text-muted-foreground">
-              Manage products, categories, and view analytics
-            </p>
-          </div>
+      {/* Add padding-top to account for fixed navbar */}
+      <div className="pt-20 sm:pt-24">
+        <div className="container mx-auto max-w-full overflow-x-hidden px-4 sm:px-6 py-6 sm:py-8">
+          <div className="max-w-7xl mx-auto">
+            {/* Header */}
+            <div className="mb-6 sm:mb-8">
+              <h1 className="text-2xl sm:text-3xl font-bold mb-2">Admin Workspace</h1>
+              <p className="text-sm sm:text-base text-muted-foreground">
+                Manage products, categories, and view analytics
+              </p>
+            </div>
+
+            <section className="mb-6 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {/* Support Links Settings */}
+              <AdminControlSection
+                title="Support Links & Login Announcement"
+                description="Set your support links and the message customers see when they log in. Leave a link blank to hide that channel."
+              >
+                {loadingSupportLinks ? (
+                  <p className="text-sm text-muted-foreground">Loading...</p>
+                ) : (
+                  <>
+                    <div>
+                      <Label htmlFor="supportWhatsapp">WhatsApp support URL</Label>
+                      <Input
+                        id="supportWhatsapp"
+                        placeholder="https://wa.me/234XXXXXXXXXX?text=..."
+                        value={supportWhatsappUrl}
+                        onChange={(e) => setSupportWhatsappUrl(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="supportTelegram">Telegram support URL</Label>
+                      <Input
+                        id="supportTelegram"
+                        placeholder="https://t.me/YourSupportHandle"
+                        value={supportTelegramUrl}
+                        onChange={(e) => setSupportTelegramUrl(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="supportChannel">Join channel URL</Label>
+                      <Input
+                        id="supportChannel"
+                        placeholder="https://t.me/YourChannel or WhatsApp channel link"
+                        value={supportChannelUrl}
+                        onChange={(e) => setSupportChannelUrl(e.target.value)}
+                        className="mt-1"
+                      />
+                    </div>
+                    <div>
+                      <Label htmlFor="supportPopup">Login announcement</Label>
+                      <textarea
+                        id="supportPopup"
+                        rows={3}
+                        maxLength={500}
+                        placeholder="Message shown to customers when they log in..."
+                        value={supportPopupMessage}
+                        onChange={(e) => setSupportPopupMessage(e.target.value)}
+                        className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      />
+                      <p className="mt-1 text-xs text-muted-foreground">This updates the login popup. It does not send email.</p>
+                    </div>
+                    <Button onClick={handleSaveSupportLinks} disabled={savingSupportLinks}>
+                      {savingSupportLinks ? 'Saving...' : 'Save announcement & links'}
+                    </Button>
+                  </>
+                )}
+              </AdminControlSection>
+
+              <AdminControlSection title="Tally Circle">
+                <p className="text-sm text-muted-foreground">Customers qualify for purchase discounts through verified referrals. Referral commissions have been retired.</p>
+              </AdminControlSection>
+
+            {/* NGN/USD Exchange Rate Settings */}
+              <AdminControlSection title="Exchange Rate Settings">
+                <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                  <div className="flex-1">
+                    <Label htmlFor="ngnUsdRate">NGN per $1 (leave blank to use the live rate)</Label>
+                    <Input
+                      id="ngnUsdRate"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="e.g. 1600"
+                      value={ngnUsdRate}
+                      onChange={(e) => setNgnUsdRate(e.target.value)}
+                      disabled={loadingNgnUsdRate}
+                    />
+                  </div>
+                  <Button onClick={handleSaveNgnUsdRate} disabled={savingNgnUsdRate || loadingNgnUsdRate}>
+                    {savingNgnUsdRate ? 'Saving...' : 'Save'}
+                  </Button>
+                  <Button variant="outline" onClick={handleClearNgnUsdRate} disabled={savingNgnUsdRate || loadingNgnUsdRate}>
+                    Use Live Rate
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
+                  When set, this overrides the live rate everywhere USD prices are shown to customers.
+                </p>
+              </AdminControlSection>
+
+              <AdminControlSection title="Provider Integrations"><ProviderIntegrations /></AdminControlSection>
+
+            {/* Ercas Pay Gateway Toggle */}
+              <AdminControlSection title="Payment Gateways">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-medium text-sm">Ercas Pay</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {ercasEnabled
+                        ? 'Enabled — customers can choose Ercas Pay or PocketFi when topping up.'
+                        : 'Disabled — customers see PocketFi (bank transfer) only.'}
+                    </p>
+                  </div>
+                  <Button
+                    variant={ercasEnabled ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={handleToggleErcas}
+                    disabled={loadingErcasEnabled || savingErcasEnabled}
+                    className="min-w-[90px]"
+                  >
+                    {savingErcasEnabled ? 'Saving...' : ercasEnabled ? 'Enabled' : 'Disabled'}
+                  </Button>
+                </div>
+
+                <div className="mt-4 pt-4 border-t">
+                  <p className="font-medium text-sm">PocketFi Virtual Account Bank</p>
+                  <p className="text-xs text-muted-foreground mt-0.5 mb-3">
+                    Choose which bank PocketFi uses to create virtual accounts for new customers.
+                    Existing accounts are not affected.
+                  </p>
+                  {loadingPocketfiBank ? (
+                    <p className="text-xs text-muted-foreground">Loading...</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2">
+                      {POCKETFI_BANKS.map((bank) => (
+                        <button
+                          key={bank.value}
+                          onClick={() => handleSavePocketfiBank(bank.value)}
+                          disabled={savingPocketfiBank}
+                          className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors text-left ${
+                            pocketfiBank === bank.value
+                              ? 'border-primary bg-primary/10 text-primary font-semibold'
+                              : 'border-border hover:border-primary/50 text-muted-foreground hover:text-foreground'
+                          }`}
+                        >
+                          <span
+                            className={`h-3 w-3 rounded-full border-2 flex-shrink-0 ${
+                              pocketfiBank === bank.value ? 'border-primary bg-primary' : 'border-muted-foreground'
+                            }`}
+                          />
+                          {bank.label}
+                          {savingPocketfiBank && pocketfiBank === bank.value && (
+                            <span className="ml-auto text-[10px]">Saving…</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </AdminControlSection>
+
+            {/* Bitrefill Catalog Curation */}
+              <div className="md:col-span-2 xl:col-span-1">
+                <AdminControlSection title="Gift Card Catalog Curation">
+                <p className="text-xs text-muted-foreground">
+                  Search Bitrefill's catalog and block specific brands you don't want customers to see.
+                  Blocked products are filtered out everywhere the catalog is shown — nothing is deleted,
+                  you can unblock anytime.
+                </p>
+                <div className="flex gap-2">
+                  <Input
+                    placeholder='Search a brand, e.g. "Amazon"'
+                    value={bitrefillCurationQuery}
+                    onChange={(e) => setBitrefillCurationQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleBitrefillCurationSearch()}
+                  />
+                  <Button onClick={handleBitrefillCurationSearch} disabled={bitrefillCurationSearching}>
+                    {bitrefillCurationSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  </Button>
+                </div>
+                {bitrefillCurationResults.length > 0 && (
+                  <div className="border rounded-lg divide-y max-h-60 overflow-y-auto">
+                    {bitrefillCurationResults.map((p) => {
+                      const blocked = bitrefillBlocklist.some(b => b.product_id === p.product_id)
+                      return (
+                        <div key={p.product_id} className="flex items-center justify-between px-3 py-2">
+                          <span className="text-sm truncate">{p.name}</span>
+                          {blocked ? (
+                            <Badge variant="outline" className="text-xs">Blocked</Badge>
+                          ) : (
+                            <Button size="sm" variant="outline" disabled={savingBitrefillBlocklist} onClick={() => handleBlockBitrefillProduct(p)}>
+                              Block
+                            </Button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+                <div>
+                  <p className="text-sm font-medium mb-2">
+                    Currently blocked ({loadingBitrefillBlocklist ? '...' : bitrefillBlocklist.length})
+                  </p>
+                  {bitrefillBlocklist.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No products blocked — the full Bitrefill catalog is visible to customers.</p>
+                  ) : (
+                    <div className="border rounded-lg divide-y max-h-60 overflow-y-auto">
+                      {bitrefillBlocklist.map((p) => (
+                        <div key={p.product_id} className="flex items-center justify-between px-3 py-2">
+                          <span className="text-sm truncate">{p.name}</span>
+                          <Button size="sm" variant="ghost" disabled={savingBitrefillBlocklist} onClick={() => handleUnblockBitrefillProduct(p.product_id)}>
+                            Unblock
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                </AdminControlSection>
+              </div>
+
+            {/* Social Boost Service Visibility */}
+              <div className="md:col-span-2 xl:col-span-3">
+                <AdminControlSection
+                  title="Social Boost Service Visibility"
+                  description="Hide entire platforms or individual services. Changes survive syncs."
+                >
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div className="hidden md:block" />
+                  <div className="flex gap-2 flex-wrap">
+                    <Button size="sm" variant="outline" onClick={handleSmmSync} disabled={smmSyncing}>
+                      {smmSyncing ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Syncing...</> : <><RefreshCw className="h-3 w-3 mr-1" />Sync Panel</>}
+                    </Button>
+                    {smmServices.length > 0 && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => handleBulkTogglePlatform('', true)} disabled={smmServicesLoading}>Show All</Button>
+                        <Button size="sm" variant="destructive" onClick={() => handleBulkTogglePlatform('', false)} disabled={smmServicesLoading}>Hide All</Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-orange-300 text-orange-700 hover:bg-orange-50"
+                          disabled={smmServicesLoading}
+                          onClick={async () => {
+                            const followerServices = smmServices.filter(s =>
+                              s.name?.toLowerCase().includes('follow') || s.name?.toLowerCase().includes('follower')
+                            )
+                            for (const s of followerServices) {
+                              if (s.is_active) await handleToggleSmmService(s.id, true)
+                            }
+                            toast({ title: `Blocked ${followerServices.length} followers services` })
+                          }}
+                        >
+                          Block Followers
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                {/* Load / search */}
+                <div className="flex gap-2">
+                  <Input
+                    placeholder='Filter by name, e.g. "followers" — leave blank to load all'
+                    value={smmServicesQuery}
+                    onChange={(e) => setSmmServicesQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && loadSmmServices(smmServicesQuery)}
+                  />
+                  <Button onClick={() => loadSmmServices(smmServicesQuery)} disabled={smmServicesLoading}>
+                    {smmServicesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                  </Button>
+                </div>
+
+                {smmServices.length === 0 && !smmServicesLoading && (
+                  <p className="text-xs text-muted-foreground">Click the search button (leave blank) to load all services.</p>
+                )}
+
+                {/* Grouped by platform */}
+                {smmServices.length > 0 && (() => {
+                  const grouped: Record<string, any[]> = {}
+                  smmServices.forEach(s => {
+                    const p = s.platform || 'other'
+                    if (!grouped[p]) grouped[p] = []
+                    grouped[p].push(s)
+                  })
+                  return Object.entries(grouped).sort(([a], [b]) => a.localeCompare(b)).map(([platform, services]) => {
+                    const allVisible = services.every(s => s.is_active)
+                    const allHidden = services.every(s => !s.is_active)
+                    const isExpanded = smmExpandedPlatforms.has(platform)
+                    return (
+                      <div key={platform} className="border rounded-lg overflow-hidden">
+                        {/* Platform header row */}
+                        <div className="flex items-center justify-between px-3 py-2 bg-muted/40 gap-3">
+                          <button
+                            className="flex items-center gap-2 flex-1 text-left"
+                            onClick={() => setSmmExpandedPlatforms(prev => {
+                              const next = new Set(prev)
+                              if (next.has(platform)) {
+                                next.delete(platform)
+                              } else {
+                                next.add(platform)
+                              }
+                              return next
+                            })}
+                          >
+                            <span className="font-medium capitalize text-sm">{platform}</span>
+                            <Badge variant="outline" className="text-[10px] px-1.5 py-0">{services.length}</Badge>
+                            <span className="text-xs text-muted-foreground">
+                              {allVisible ? '● all visible' : allHidden ? '○ all hidden' : `${services.filter(s => s.is_active).length} visible`}
+                            </span>
+                            <span className="text-xs text-muted-foreground ml-auto">{isExpanded ? '▲' : '▼'}</span>
+                          </button>
+                          <div className="flex gap-1.5 shrink-0">
+                            <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => handleBulkTogglePlatform(platform, true)} disabled={smmServicesLoading || allVisible}>Show all</Button>
+                            <Button size="sm" variant="outline" className="h-6 text-xs px-2" onClick={() => handleBulkTogglePlatform(platform, false)} disabled={smmServicesLoading || allHidden}>Hide all</Button>
+                          </div>
+                        </div>
+                        {/* Individual services (collapsed by default) */}
+                        {isExpanded && (
+                          <div className="divide-y">
+                            {services.map(svc => (
+                              <div key={svc.id} className="flex items-center justify-between px-3 py-1.5 gap-3">
+                                <p className="text-xs flex-1 truncate text-muted-foreground">{svc.name}</p>
+                                <Button
+                                  size="sm"
+                                  variant={svc.is_active ? 'ghost' : 'outline'}
+                                  onClick={() => handleToggleSmmService(svc.id, svc.is_active)}
+                                  disabled={smmTogglingId === svc.id}
+                                  className="h-6 text-xs px-2 shrink-0"
+                                >
+                                  {smmTogglingId === svc.id ? <Loader2 className="h-3 w-3 animate-spin" /> : svc.is_active ? 'Hide' : 'Show'}
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+                })()}
+                </AdminControlSection>
+              </div>
+
+            {/* Product Suggestions ("trending category" panel) */}
+              <div className="md:col-span-2 xl:col-span-3">
+                <AdminControlSection title="Product Suggestions">
+                <div className="mb-3 flex justify-end">
+                  <Button size="sm" onClick={handleCheckTrends} disabled={isCheckingTrends}>
+                    {isCheckingTrends ? 'Checking...' : 'Check Trends'}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Flags categories whose sales are growing fast in your own store and suggests
+                  adding a new product based on your best template in that category. Accepting
+                  never spends money by itself - it just creates a draft you can fill in and test.
+                </p>
+                {productSuggestions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">No pending suggestions. Click "Check Trends" to scan recent sales.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {productSuggestions.map((s) => (
+                      <div key={s.id} className="border rounded-lg p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div>
+                          <p className="font-medium">{s.suggested_name}</p>
+                          <p className="text-xs text-muted-foreground">{s.categories?.name ? `${s.categories.name} · ` : ''}{s.reason}</p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" onClick={() => handleDismissSuggestion(s.id)}>
+                            Not now
+                          </Button>
+                          <Button size="sm" onClick={() => handleAcceptSuggestion(s)}>
+                            Add product
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                </AdminControlSection>
+              </div>
+            </section>
 
           {/* View Account Modal */}
           {viewingAccount && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-                <h2 className="text-xl font-bold mb-4">Account Details</h2>
-                <div className="space-y-3">
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+                <h2 className="text-lg sm:text-xl font-bold mb-4">Account Details</h2>
+                <div className="space-y-3 text-sm sm:text-base">
                   <div><strong>Username:</strong> @{viewingAccount.username}</div>
                   <div><strong>Password:</strong> {viewingAccount.password}</div>
                   {viewingAccount.email && <div><strong>Email:</strong> {viewingAccount.email}</div>}
@@ -612,9 +6497,9 @@ export default function AdminPage() {
 
           {/* Edit Category Modal */}
           {editingCategory && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-                <h2 className="text-xl font-bold mb-4">Edit Category</h2>
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+                <h2 className="text-lg sm:text-xl font-bold mb-4">Edit Category</h2>
                 <div className="space-y-4">
                   <div>
                     <label className="text-sm font-medium block mb-1">Category Name</label>
@@ -660,9 +6545,9 @@ export default function AdminPage() {
             </div>
           )}
           {editingAccount && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-                <h2 className="text-xl font-bold mb-4">Edit Account</h2>
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+                <h2 className="text-lg sm:text-xl font-bold mb-4">Edit Account</h2>
                 <div className="space-y-4">
                   <div>
                     <label className="text-sm font-medium block mb-1">Username</label>
@@ -730,9 +6615,9 @@ export default function AdminPage() {
             </div>
           )}
           {editingTemplate && (
-            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-              <div className="bg-white dark:bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-                <h2 className="text-xl font-bold mb-4">Edit Product Template</h2>
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-4 sm:p-6 max-w-md w-full max-h-[90vh] overflow-y-auto">
+                <h2 className="text-lg sm:text-xl font-bold mb-4">Edit Product Template</h2>
                 <div className="space-y-4">
                   <div>
                     <label className="text-sm font-medium block mb-1">Product Name</label>
@@ -776,6 +6661,171 @@ export default function AdminPage() {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div className="border-t pt-4">
+                    <label className="text-sm font-medium block mb-1">MuaBanVia Auto-Fulfillment</label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      When enabled, if pre-stocked accounts run out, the shortfall is purchased
+                      live from MuaBanVia using the product ID below.
+                    </p>
+                    <Input
+                      placeholder="MuaBanVia product ID (optional)"
+                      value={editingTemplate.muabanvia_product_id || ''}
+                      onChange={(e) => setEditingTemplate({...editingTemplate, muabanvia_product_id: e.target.value})}
+                      className="mb-2"
+                    />
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="auto_fulfill_enabled"
+                        checked={!!editingTemplate.auto_fulfill_enabled}
+                        onChange={(e) => setEditingTemplate({...editingTemplate, auto_fulfill_enabled: e.target.checked})}
+                      />
+                      <label htmlFor="auto_fulfill_enabled" className="text-sm">
+                        Enable auto-fulfillment for this product
+                      </label>
+                    </div>
+                    {isPartnerOwner && editingTemplate?.id && productGroups.some((group) =>
+                      group.id === editingTemplate.id && group.auto_fulfill_enabled
+                      && Boolean(group.muabanvia_product_id || group.shopclone_product_id || group.shopviaclone_product_id)
+                    ) && (
+                      <div className="mt-3 space-y-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={resettingSupplierFallbackId !== null}
+                          onClick={() => handleResetSupplierFallback(editingTemplate.id)}
+                        >
+                          {resettingSupplierFallbackId === editingTemplate.id ? 'Checking supplier fallback...' : 'Retry supplier fallback'}
+                        </Button>
+                        <p className="text-xs text-muted-foreground">
+                          Use after supplier stock or balance is restored. Orders still being confirmed require review first.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="border-t pt-4">
+                    <label className="text-sm font-medium block mb-1">ShopClone Fallback</label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Tried next if MuaBanVia is disabled, not configured, or fails. Leave
+                      blank to skip ShopClone for this product.
+                    </p>
+                    <Input
+                      placeholder="ShopClone product ID (optional)"
+                      value={editingTemplate.shopclone_product_id || ''}
+                      onChange={(e) => setEditingTemplate({...editingTemplate, shopclone_product_id: e.target.value})}
+                    />
+                  </div>
+                  <div className="border-t pt-4">
+                    <label className="text-sm font-medium block mb-1">ShopViaClone22 Fallback</label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Tried last, if MuaBanVia and ShopClone are both unavailable or fail.
+                      Leave blank to skip ShopViaClone22 for this product. If every configured
+                      provider fails, the purchase simply fails as out of stock.
+                    </p>
+                    <Input
+                      placeholder="ShopViaClone22 product ID (optional)"
+                      value={editingTemplate.shopviaclone_product_id || ''}
+                      onChange={(e) => setEditingTemplate({...editingTemplate, shopviaclone_product_id: e.target.value})}
+                    />
+                  </div>
+                  <div className="border-t pt-4">
+                    <label className="text-sm font-medium block mb-1">Proactive Auto-Restock</label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      When enabled, a scheduled job buys ahead of demand for this product
+                      (based on recent sales speed) instead of waiting for stock to hit zero.
+                      Uses whichever provider IDs above are filled in, in the same order.
+                    </p>
+                    <div className="flex items-center gap-2 mb-2">
+                      <input
+                        type="checkbox"
+                        id="auto_restock_enabled"
+                        checked={!!editingTemplate.auto_restock_enabled}
+                        onChange={(e) => setEditingTemplate({...editingTemplate, auto_restock_enabled: e.target.checked})}
+                      />
+                      <label htmlFor="auto_restock_enabled" className="text-sm">
+                        Enable proactive auto-restock for this product
+                      </label>
+                    </div>
+                    <Input
+                      type="number"
+                      min={1}
+                      placeholder="Buffer days (default 3)"
+                      value={editingTemplate.restock_buffer_days ?? 3}
+                      onChange={(e) => setEditingTemplate({...editingTemplate, restock_buffer_days: parseFloat(e.target.value) || 3})}
+                    />
+                  </div>
+                  <div className="border-t pt-4">
+                    <label className="text-sm font-medium block mb-1">Buy More, Save More</label>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Quantity discount tiers - customers buying at least this many units get
+                      this % off the total automatically, applied at checkout and shown on the
+                      product card. Leave a row's quantity at 0 to disable it.
+                    </p>
+                    <div className="space-y-2">
+                      {[0, 1, 2].map((i) => {
+                        const tiers = editingTemplate.quantity_discount_tiers || []
+                        const tier = tiers[i] || { min_qty: 0, discount_pct: 0 }
+                        const updateTier = (field: 'min_qty' | 'discount_pct', value: number) => {
+                          const next = [...(editingTemplate.quantity_discount_tiers || [])]
+                          next[i] = { ...tier, [field]: value }
+                          setEditingTemplate({ ...editingTemplate, quantity_discount_tiers: next })
+                        }
+                        return (
+                          <div key={i} className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              min={0}
+                              placeholder="Min qty"
+                              className="w-28"
+                              value={tier.min_qty || ''}
+                              onChange={(e) => updateTier('min_qty', parseInt(e.target.value) || 0)}
+                            />
+                            <span className="text-xs text-muted-foreground">units gets</span>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={100}
+                              placeholder="% off"
+                              className="w-24"
+                              value={tier.discount_pct || ''}
+                              onChange={(e) => updateTier('discount_pct', parseInt(e.target.value) || 0)}
+                            />
+                            <span className="text-xs text-muted-foreground">% off</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  {editingTemplate.id && (
+                    <div className="border-t pt-4">
+                      <label className="text-sm font-medium block mb-1">Test Stock (manual one-off buy)</label>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Buys a small batch right now using whichever provider IDs above are
+                        filled in. Useful for testing a brand-new product before turning on
+                        auto-restock. This spends real money - it's a separate, explicit action.
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={100}
+                          className="w-28"
+                          placeholder="Qty"
+                          value={restockQty[editingTemplate.id] ?? 10}
+                          onChange={(e) => setRestockQty({...restockQty, [editingTemplate.id]: parseInt(e.target.value) || 10})}
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={restockingId === editingTemplate.id}
+                          onClick={() => handleTestStock(editingTemplate.id)}
+                        >
+                          {restockingId === editingTemplate.id ? 'Buying...' : 'Test Stock'}
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <div className="flex gap-2 mt-6">
                   <Button onClick={() => setEditingTemplate(null)} variant="outline" className="flex-1">
@@ -788,6 +6838,707 @@ export default function AdminPage() {
               </div>
             </div>
           )}
+
+          <Dialog
+            open={Boolean(suspensionTarget)}
+            onOpenChange={(open) => {
+              if (!open && !isSuspendingUser) {
+                setSuspensionTarget(null)
+                setSuspensionReason('')
+                setSuspensionEvidenceReviewed(false)
+              }
+            }}
+          >
+            <DialogContent className="max-w-md w-[95vw] sm:w-full">
+              <DialogHeader>
+                <DialogTitle>Suspend customer account</DialogTitle>
+                <DialogDescription className="break-words">
+                  Review the payment and wallet evidence for {suspensionTarget?.email} before blocking purchases.
+                  An integrity signal alone does not establish misconduct.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-2">
+                <Label htmlFor="customer-suspension-reason">Specific reason and evidence</Label>
+                <Textarea
+                  id="customer-suspension-reason"
+                  value={suspensionReason}
+                  onChange={(event) => setSuspensionReason(event.target.value)}
+                  placeholder="Describe the verified payment, transaction, or account evidence"
+                  rows={4}
+                />
+                <p className="text-xs text-muted-foreground">Enter at least 20 characters. This reason is stored with the suspension.</p>
+              </div>
+              <div className="flex items-start gap-2">
+                <Checkbox
+                  id="customer-suspension-evidence-reviewed"
+                  checked={suspensionEvidenceReviewed}
+                  onCheckedChange={(checked) => setSuspensionEvidenceReviewed(checked === true)}
+                />
+                <Label htmlFor="customer-suspension-evidence-reviewed" className="text-sm leading-snug">
+                  I checked the payment and transaction evidence for this account.
+                </Label>
+              </div>
+              <DialogFooter>
+                <Button type="button" variant="outline" onClick={() => { setSuspensionTarget(null); setSuspensionEvidenceReviewed(false) }} disabled={isSuspendingUser}>Cancel</Button>
+                <Button type="button" variant="destructive" onClick={handleConfirmSuspendUser} disabled={isSuspendingUser || suspensionReason.trim().length < 20 || !suspensionEvidenceReviewed}>
+                  {isSuspendingUser && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  Suspend account
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          <Dialog open={recoverPaymentOpen} onOpenChange={(open) => !recoverBusy && setRecoverPaymentOpen(open)}>
+            <DialogContent className="max-w-md w-[95vw] sm:w-full">
+              <DialogHeader>
+                <DialogTitle>Recover Verified Ercas Payment</DialogTitle>
+                <DialogDescription className="break-words">
+                  Check a missed payment for {selectedUser?.email}. The checkout must belong to this customer, and Ercas must confirm its amount before the wallet can be credited.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label>Ercas transaction reference</Label>
+                  <Input
+                    placeholder="ER|..."
+                    value={recoverReference}
+                    onChange={(event) => setRecoverReference(event.target.value)}
+                    disabled={recoverBusy}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Reason for recovery</Label>
+                  <Textarea
+                    placeholder="Support ticket, customer receipt, and why this payment needs another check"
+                    value={recoverReason}
+                    onChange={(event) => setRecoverReason(event.target.value)}
+                    rows={3}
+                    disabled={recoverBusy}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  This action never uses an amount entered by an admin. It records your request and credits only a provider-confirmed payment once.
+                </p>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setRecoverPaymentOpen(false)} disabled={recoverBusy}>Cancel</Button>
+                <Button onClick={handleRecoverErcasPayment} disabled={recoverBusy || recoverReference.trim().length < 8 || recoverReason.trim().length < 10}>
+                  {recoverBusy ? 'Verifying...' : 'Verify and Recover'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* Balance Adjustment Modal */}
+          <Dialog open={adjustBalanceOpen} onOpenChange={setAdjustBalanceOpen}>
+            <DialogContent className="max-w-md w-[95vw] sm:w-full">
+              <DialogHeader>
+                <DialogTitle>Adjust User Balance</DialogTitle>
+                <DialogDescription className="break-words">
+                  Modify wallet balance for {selectedUser?.email}
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-4">
+                {/* Current Balance Display */}
+                <div className="p-4 bg-muted rounded-lg">
+                  <p className="text-sm text-muted-foreground mb-1">Current Balance</p>
+                  <p className="text-2xl font-bold">
+                    ₦{(selectedUser?.wallet_balance || 0).toLocaleString()}
+                  </p>
+                </div>
+
+                {/* Adjustment Type Selector */}
+                <div className="space-y-2">
+                  <Label>Action</Label>
+                  <Select
+                    value={adjustmentType}
+                    onValueChange={(value: 'add' | 'subtract' | 'chargeback') => {
+                      setAdjustmentType(value)
+                      setLedgerOnlyCredit(value === 'add')
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="add">Record Historical Credit Note</SelectItem>
+                      <SelectItem value="subtract">Deduct Funds (Debit)</SelectItem>
+                      <SelectItem value="chargeback">Record Chargeback</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {adjustmentType === 'add' && (
+                  <div className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+                    <span>
+                      <span className="font-medium">Record historical ledger note only</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">
+                        This preserves a claim for investigation. It does not approve funding, change the balance, or unblock spending.
+                      </span>
+                    </span>
+                  </div>
+                )}
+
+                {/* Amount Input */}
+                <div className="space-y-2">
+                  <Label>Amount (₦)</Label>
+                  <Input
+                    type="number"
+                    placeholder="5000"
+                    value={adjustmentAmount}
+                    onChange={(e) => setAdjustmentAmount(e.target.value)}
+                    min="1"
+                  />
+                </div>
+
+                {adjustmentType === 'chargeback' && (
+                  <div className="space-y-2">
+                    <Label>Chargeback Reference</Label>
+                    <Input
+                      placeholder="Payment, dispute, or provider reversal reference"
+                      value={adjustmentReference}
+                      onChange={(e) => setAdjustmentReference(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                {/* Reason Textarea */}
+                <div className="space-y-2">
+                  <Label>Reason (Required)</Label>
+                  <Textarea
+                    placeholder={adjustmentType === 'chargeback' ? 'e.g., Provider payment reversal reference and evidence...' : adjustmentType === 'add' ? 'e.g., Historical funding claim and date for review...' : 'e.g., Correction or documented debit...'}
+                    value={adjustmentReason}
+                    onChange={(e) => setAdjustmentReason(e.target.value)}
+                    rows={3}
+                  />
+                </div>
+
+                {/* Preview */}
+                {adjustmentAmount && (
+                  <div className="p-4 bg-muted rounded-lg border-2 border-primary/20">
+                    <p className="text-sm font-semibold mb-2">Preview:</p>
+                    <div className="space-y-1 text-sm">
+                      <p>
+                        Current: ₦{(selectedUser?.wallet_balance || 0).toLocaleString()}
+                      </p>
+                      <p className={adjustmentType === 'add' ? 'text-muted-foreground font-medium' : 'text-red-600 font-medium'}>
+                        {adjustmentType === 'add' ? 'Historical note: ' : '-₦'}{adjustmentType === 'add' ? '₦' : ''}{parseFloat(adjustmentAmount || '0').toLocaleString()}
+                      </p>
+                      <p className="font-bold border-t pt-1 mt-1">
+                        {ledgerOnlyCredit ? `Balance stays: ₦${(selectedUser?.wallet_balance || 0).toLocaleString()}` : `New Balance: ₦${calculateNewBalance()}`}
+                      </p>
+                      {adjustmentType === 'chargeback' && (
+                        <p className="text-xs text-red-600">
+                          Records a chargeback through the wallet engine and suspends this customer for wallet review.
+                        </p>
+                      )}
+                      {ledgerOnlyCredit && (
+                        <p className="text-xs text-muted-foreground">
+                          A balance-neutral admin_credit note will appear in history. It is not trusted funding.
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <DialogFooter>
+                <Button
+                  variant="outline"
+                  onClick={() => setAdjustBalanceOpen(false)}
+                  disabled={isAdjusting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSubmitAdjustment}
+                  disabled={!adjustmentAmount || adjustmentReason.trim().length < 3 || (adjustmentType === 'chargeback' && adjustmentReference.trim().length < 3) || isAdjusting}
+                >
+                  {isAdjusting ? 'Processing...' : ledgerOnlyCredit ? 'Record Credit History' : adjustmentType === 'chargeback' ? 'Record Chargeback' : (adjustmentType === 'add' ? 'Add Funds' : 'Deduct Funds')}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
+          {/* User Details Modal */}
+          <Dialog
+            open={viewUserOpen}
+            onOpenChange={(open) => {
+              setViewUserOpen(open)
+              if (!open) {
+                userFinancialTruthRequestRef.current += 1
+                setUserFinancialTruth(null)
+                setUserFinancialTruthError(null)
+                setUserFinancialTruthLoading(false)
+                setShowAllUserTransactions(false)
+                setShowAllUserOrders(false)
+                setShowAllUserSecurityEvents(false)
+              }
+            }}
+          >
+            <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto w-[95vw] sm:w-full">
+              <DialogHeader>
+                <DialogTitle>User Details</DialogTitle>
+                <DialogDescription>
+                  Complete account information and activity
+                </DialogDescription>
+              </DialogHeader>
+
+              <div className="space-y-6">
+                {/* Account Information Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg">Account Information</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <p className="text-sm text-muted-foreground">Email</p>
+                        <p className="font-mono text-sm">{selectedUser?.email}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Full Name</p>
+                        <p>{selectedUser?.full_name || 'Not set'}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Wallet Balance</p>
+                        <p className="text-lg font-bold">
+                          {userFinancialTruth ? formatAdminNaira(userFinancialTruth.stored_wallet_balance) : userFinancialTruthLoading ? 'Loading...' : 'Unavailable'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Account Status</p>
+                        <div className="mt-1 flex flex-wrap items-center gap-2">
+                          {selectedUser?.account_suspended ? (
+                            <Badge variant="destructive">Suspended</Badge>
+                          ) : selectedUser?.is_admin ? (
+                            <Badge>Admin</Badge>
+                          ) : selectedUser?.is_staff ? (
+                            <Badge variant="outline">Staff</Badge>
+                          ) : (
+                            <Badge variant="secondary">Customer</Badge>
+                          )}
+                          {selectedUser?.account_suspended && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              onClick={handleUnsuspendSelectedUser}
+                              disabled={isUnsuspendingUser}
+                            >
+                              {isUnsuspendingUser ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserCheck className="mr-2 h-4 w-4" />}
+                              Unsuspend
+                            </Button>
+                          )}
+                          {!selectedUser?.account_suspended && !selectedUser?.is_admin && !selectedUser?.is_staff && (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => {
+                                setSuspensionReason('')
+                                setSuspensionEvidenceReviewed(false)
+                                setSuspensionTarget({ id: selectedUser.id, email: selectedUser.email || 'Customer' })
+                              }}
+                              disabled={isSuspendingUser}
+                            >
+                              {isSuspendingUser ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserX className="mr-2 h-4 w-4" />}
+                              Suspend
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                      {selectedUser?.account_suspended && (
+                        <div className="sm:col-span-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+                          <p className="text-sm font-semibold text-destructive">Suspension reason</p>
+                          <p className="mt-1 text-sm text-muted-foreground">
+                            {selectedUser.suspension_reason || 'Suspended by ledger protection.'}
+                          </p>
+                          {selectedUser.suspended_at && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Suspended {formatAdminDateWithRelative(selectedUser.suspended_at)}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                      <div>
+                        <p className="text-sm text-muted-foreground">User ID</p>
+                        <p className="font-mono text-xs">{selectedUser?.id}</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground">Joined Date</p>
+                        <p>{formatAdminDateWithRelative(selectedUser?.created_at)}</p>
+                      </div>
+                      {selectedUser?.fraud_last_ip_address && (
+                        <div className="sm:col-span-2 rounded-lg border p-3">
+                          <p className="text-sm font-semibold">Fraud IP evidence</p>
+                          <p className="mt-1 font-mono text-sm">{selectedUser.fraud_last_ip_address}</p>
+                          {selectedUser.fraud_last_ip_location && (
+                            <p className="mt-1 text-sm font-medium">{selectedUser.fraud_last_ip_location}</p>
+                          )}
+                          {selectedUser.fraud_last_ip_isp && (
+                            <p className="text-xs text-muted-foreground">{selectedUser.fraud_last_ip_isp}</p>
+                          )}
+                          {selectedUser.fraud_device_label && (
+                            <p className="mt-1 text-sm font-medium">{selectedUser.fraud_device_label}</p>
+                          )}
+                          {(selectedUser.fraud_device_type || selectedUser.fraud_device_os || selectedUser.fraud_device_browser) && (
+                            <p className="text-xs text-muted-foreground">
+                              {[selectedUser.fraud_device_type, selectedUser.fraud_device_os, selectedUser.fraud_device_browser].filter(Boolean).join(' · ')}
+                            </p>
+                          )}
+                          {selectedUser.fraud_last_ip_seen_at && (
+                            <p className="text-xs text-muted-foreground">
+                              Last seen {formatAdminDateWithRelative(selectedUser.fraud_last_ip_seen_at)}
+                            </p>
+                          )}
+                          {selectedUser.fraud_last_user_agent && (
+                            <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">
+                              {selectedUser.fraud_last_user_agent}
+                            </p>
+                          )}
+                          {Array.isArray(selectedUser.fraud_ip_addresses) && selectedUser.fraud_ip_addresses.length > 1 && (
+                            <p className="mt-1 font-mono text-xs text-muted-foreground">
+                              Other IPs: {selectedUser.fraud_ip_addresses.filter((ip: string) => ip !== selectedUser.fraud_last_ip_address).join(', ')}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <section className="space-y-3 border-t pt-4" aria-label="Canonical wallet financial truth">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-semibold">Wallet financial truth</h3>
+                    {userFinancialTruth && (
+                      <Badge variant={userFinancialTruth.integrity_status === 'consistent' ? 'secondary' : 'destructive'}>
+                        {userFinancialTruth.integrity_status.replace(/_/g, ' ')}
+                      </Badge>
+                    )}
+                    <Button type="button" size="icon" variant="ghost" className="ml-auto h-8 w-8"
+                      title="Refresh wallet financial truth" aria-label="Refresh wallet financial truth"
+                      disabled={!selectedUser?.id || userFinancialTruthLoading}
+                      onClick={() => selectedUser?.id && loadUserFinancialTruth(selectedUser.id)}>
+                      <RefreshCw className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {userFinancialTruthLoading ? (
+                    <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading financial truth...</p>
+                  ) : userFinancialTruthError || !userFinancialTruth ? (
+                    <p className="text-sm text-destructive" role="alert">{userFinancialTruthError || 'Canonical financial truth unavailable.'}</p>
+                  ) : (
+                    <>
+                      {!userFinancialTruth.evidence_complete && (
+                        <p className="text-sm text-destructive">Financial evidence is incomplete. Do not treat spendable funds as verified.</p>
+                      )}
+                      {userFinancialTruth.legacy_spend_before_recorded_funding && (
+                        <p className="text-sm text-amber-700">
+                          Historical debit predates recorded legacy funding. First debit: {formatAdminAbsoluteDateTime(userFinancialTruth.legacy_first_recorded_debit_at)}; first credit: {formatAdminAbsoluteDateTime(userFinancialTruth.legacy_first_recorded_funding_at)}. Check older payment records before resolving this signal.
+                        </p>
+                      )}
+                      <dl className="grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                        {([
+                          ['Verified gateway deposits', 'verified_gateway_deposits'],
+                          ['Approved admin credits', 'approved_admin_credits'],
+                          ['Legacy approved principal', 'legacy_approved_principal'],
+                          ['Trusted principal', 'trusted_principal'],
+                          ['Completed debits', 'completed_debits'],
+                          ['Completed purchases', 'completed_purchases'],
+                          ['Eligible refunds', 'eligible_refunds'],
+                          ['Completed refunds', 'completed_refunds'],
+                          ['Active reservations', 'active_reservations'],
+                          ['Withdrawals', 'withdrawals'],
+                          ['Chargebacks', 'chargebacks'],
+                          ['Trusted book balance', 'trusted_book_balance'],
+                          ['Current purchase limit', 'confirmed_spendable'],
+                          ['Expected balance after reviewed credits', 'expected_ledger_balance'],
+                          ['Stored wallet balance', 'stored_wallet_balance'],
+                          ['Explained difference', 'explained_difference'],
+                          ['Unexplained difference', 'unexplained_difference'],
+                          ['Quarantined excess', 'quarantined_excess'],
+                        ] as const).map(([label, key]) => (
+                          <div key={key} className="flex justify-between gap-3 border-b py-1">
+                            <dt className="text-muted-foreground">{label}</dt>
+                            <dd className="shrink-0 font-medium tabular-nums">{formatAdminNaira(userFinancialTruth[key])}</dd>
+                          </div>
+                        ))}
+                        {typeof userFinancialTruth.recorded_transaction_balance === 'number' && (
+                          <div className="flex justify-between gap-3 border-b py-1">
+                            <dt className="text-muted-foreground">Recorded transaction total before recovery</dt>
+                            <dd className="shrink-0 font-medium tabular-nums">{formatAdminNaira(userFinancialTruth.recorded_transaction_balance)}</dd>
+                          </div>
+                        )}
+                        {typeof userFinancialTruth.approved_historical_admin_credits === 'number' && (
+                          <div className="flex justify-between gap-3 border-b py-1">
+                            <dt className="text-muted-foreground">Of which: reviewed historical admin credits</dt>
+                            <dd className="shrink-0 font-medium tabular-nums">{formatAdminNaira(userFinancialTruth.approved_historical_admin_credits)}</dd>
+                          </div>
+                        )}
+                      </dl>
+                      {userFinancialTruth.authorization_basis === 'legacy_recorded_funding_stored_balance' && (
+                        <p className="text-xs text-muted-foreground">
+                          Legacy funded account: purchases use the stored wallet balance, less active holds. Historical credit provenance remains under review.
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Spending {userFinancialTruth.spending_blocked ? 'blocked' : 'permitted up to the current purchase limit'}; account {userFinancialTruth.account_suspended ? 'suspended' : 'active'}; wallet review {userFinancialTruth.wallet_review_required ? 'required' : 'not required'}. Activity below is history, not a financial total.
+                      </p>
+                    </>
+                  )}
+                </section>
+
+                {/* Security Events Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center justify-between">
+                      <span>Security Events</span>
+                      <Badge variant="outline">{userSecurityEvents.length} total</Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {userSecurityEvents.length === 0 ? (
+                      <p className="text-center text-muted-foreground py-4">No security events found</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {(showAllUserSecurityEvents ? userSecurityEvents : userSecurityEvents.slice(0, 5)).map((event) => {
+                          const snapshot = event.financial_snapshot && typeof event.financial_snapshot === 'object'
+                            ? event.financial_snapshot
+                            : {}
+                          const metadata = event.metadata && typeof event.metadata === 'object'
+                            ? event.metadata
+                            : {}
+                          return (
+                            <div key={event.id} className="rounded-lg border p-3">
+                              <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <Badge variant={event.severity === 'critical' ? 'destructive' : 'outline'}>
+                                  {event.event_type || 'security_event'}
+                                </Badge>
+                                {event.denial_code && (
+                                  <Badge variant="secondary">{event.denial_code}</Badge>
+                                )}
+                                <span className="text-sm text-muted-foreground">
+                                  {event.created_at ? formatAdminDateWithRelative(event.created_at) : 'Unknown time'}
+                                </span>
+                              </div>
+                              <div className="grid gap-2 text-sm sm:grid-cols-2">
+                                <div>
+                                  <p className="text-muted-foreground">Result</p>
+                                  <p className="font-medium">{event.result || event.severity || 'recorded'}</p>
+                                </div>
+                                <div>
+                                  <p className="text-muted-foreground">Source</p>
+                                  <p className="font-medium">{event.route || event.db_function || event.source || 'Unknown'}</p>
+                                </div>
+                                {event.actor_user_id && (
+                                  <div className="sm:col-span-2">
+                                    <p className="text-muted-foreground">Actor</p>
+                                    <p className="break-all font-mono text-xs">{event.actor_role || 'user'} · {event.actor_user_id}</p>
+                                  </div>
+                                )}
+                                {(event.request_id || event.idempotency_key || event.operation_reference) && (
+                                  <div className="sm:col-span-2">
+                                    <p className="text-muted-foreground">Reference</p>
+                                    {event.operation_reference && <p className="break-all font-mono text-xs">Payment: {event.operation_reference}</p>}
+                                    {event.request_id && <p className="break-all font-mono text-xs">Request: {event.request_id}</p>}
+                                    {!event.request_id && event.idempotency_key && <p className="break-all font-mono text-xs">{event.idempotency_key}</p>}
+                                  </div>
+                                )}
+                                {(snapshot.suspension_reason || metadata.reason) && (
+                                  <div className="sm:col-span-2">
+                                    <p className="text-muted-foreground">Reason</p>
+                                    <p className="text-sm">{snapshot.suspension_reason || metadata.reason}</p>
+                                  </div>
+                                )}
+                                {(event.ip_address || event.device_fingerprint || event.user_agent) && (
+                                  <div className="sm:col-span-2">
+                                    <p className="text-muted-foreground">Device/IP evidence</p>
+                                    {event.ip_address && <p className="font-mono text-xs">{event.ip_address}</p>}
+                                    {event.device_fingerprint && <p className="font-mono text-xs">{event.device_fingerprint}</p>}
+                                    {event.user_agent && <p className="break-all font-mono text-[11px] text-muted-foreground">{event.user_agent}</p>}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                        {userSecurityEvents.length > 5 && (
+                          <div className="pt-2 text-center">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setShowAllUserSecurityEvents(prev => !prev)}
+                            >
+                              {showAllUserSecurityEvents ? 'Show less' : `See all ${userSecurityEvents.length} security events`}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Recent Transactions Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center justify-between">
+                      <span>Recent Transactions</span>
+                      <Badge variant="outline">{userTransactions.length} total</Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {userActivityWarning && (
+                      <p className="text-sm text-destructive pb-3" role="status">{userActivityWarning}</p>
+                    )}
+                    {userActivityLoading ? (
+                      <p className="text-center text-muted-foreground py-4">Loading transactions...</p>
+                    ) : userActivityError ? (
+                      <p className="text-center text-destructive py-4" role="alert">Transaction history unavailable: {userActivityError}</p>
+                    ) : userTransactions.length === 0 ? (
+                      <p className="text-center text-muted-foreground py-4">No transactions found</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {(showAllUserTransactions ? userTransactions : userTransactions.slice(0, 5)).map((tx) => {
+                          const isEvidenceOnly = isBalanceNeutralLedgerEvidence(tx)
+                          const isWalletLedgerRow = !tx.balance_type || tx.balance_type === 'wallet'
+                          const signedAmount = getWalletTransactionDisplayAmount(tx)
+                          const isCredit = isWalletLedgerRow && signedAmount > 0
+                          const isSpend = isWalletLedgerRow && signedAmount < 0
+                          const displayAmount = Math.abs(signedAmount)
+
+                          return (
+                            <div key={tx.id} className="flex items-center justify-between p-3 border rounded-lg">
+                              <div className="flex-1">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <Badge variant={isCredit ? 'default' : 'secondary'}>
+                                    {isEvidenceOnly ? 'ledger evidence' : tx.type}
+                                  </Badge>
+                                  <span className="text-sm text-muted-foreground">
+                                    {format(new Date(tx.created_at), 'MMM d, HH:mm')}
+                                  </span>
+                                </div>
+                                <p className="text-sm">{tx.description || 'No description'}</p>
+                                {isEvidenceOnly && <p className="text-xs text-muted-foreground">Balance unchanged; nominal entry {formatAdminNaira(Number(tx.amount || 0))}.</p>}
+                                {!isWalletLedgerRow && <p className="text-xs text-muted-foreground">Separate activity record; wallet postings are listed separately.</p>}
+                              </div>
+                              <div className="text-right">
+                                <p className={`font-bold ${isCredit ? 'text-green-600' : isSpend ? 'text-red-600' : 'text-muted-foreground'}`}>
+                                  {isCredit ? '+' : isSpend ? '-' : ''}
+                                  ₦{(isWalletLedgerRow ? displayAmount : Math.abs(Number(tx.amount || 0))).toLocaleString()}
+                                </p>
+                              </div>
+                            </div>
+                          )
+                        })}
+                        {userTransactions.length > 5 && (
+                          <div className="pt-2 text-center">
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setShowAllUserTransactions(prev => !prev)}
+                            >
+                              {showAllUserTransactions ? 'Show less' : `See all ${userTransactions.length} transactions`}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+
+                {/* Order History Card */}
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center justify-between">
+                      <span>Order History</span>
+                      <Badge variant="outline">{userOrders.length} orders</Badge>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {userOrders.length === 0 ? (
+                      <p className="text-center text-muted-foreground py-4">No orders found</p>
+                    ) : (
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-2 gap-4 p-4 bg-muted rounded-lg">
+                          <div>
+                            <p className="text-sm text-muted-foreground">Loaded orders</p>
+                            <p className="text-2xl font-bold">{userOrders.length}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-muted-foreground">Completed purchases</p>
+                            <p className="text-2xl font-bold">{userFinancialTruth ? formatAdminNaira(userFinancialTruth.completed_purchases) : 'Unavailable'}</p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-2">
+                          {(showAllUserOrders ? userOrders : userOrders.slice(0, 5)).map((order) => (
+                            <div key={order.id} className="flex items-center justify-between p-3 border rounded-lg">
+                              <div className="flex-1">
+                                <p className="font-medium">
+                                  {order.product_groups?.name || 'Unknown Product'}
+                                </p>
+                                <p className="text-sm text-muted-foreground">
+                                  {format(new Date(order.created_at), 'MMM d, yyyy')} • 
+                                  Order #{order.id.slice(0, 8)}
+                                </p>
+                              </div>
+                              <div className="text-right">
+                                <p className="font-bold">₦{(order.amount || 0).toLocaleString()}</p>
+                                <Badge variant={order.status === 'completed' ? 'default' : 'secondary'}>
+                                  {order.status}
+                                </Badge>
+                              </div>
+                            </div>
+                          ))}
+                          {userOrders.length > 5 && (
+                            <div className="pt-2 text-center">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setShowAllUserOrders(prev => !prev)}
+                              >
+                                {showAllUserOrders ? 'Show less' : `See all ${userOrders.length} orders`}
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={downloadSelectedUserHistoryCsv} disabled={!selectedUser}>
+                  <Download className="h-4 w-4 mr-2" />
+                  Download CSV
+                </Button>
+                <Button variant="outline" disabled={!selectedUser || selectedUser.is_admin || selectedUser.is_staff}
+                  onClick={() => {
+                    setRecoverReference('')
+                    setRecoverReason('')
+                    setViewUserOpen(false)
+                    setRecoverPaymentOpen(true)
+                  }}>
+                  Recover Ercas Payment
+                </Button>
+                <Button variant="outline" onClick={() => setViewUserOpen(false)}>
+                  Close
+                </Button>
+                <Button onClick={() => {
+                  setViewUserOpen(false)
+                  handleAdjustBalance(selectedUser)
+                }}>
+                  <DollarSign className="h-4 w-4 mr-2" />
+                  Adjust Balance
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           {/* Stats Overview */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -840,15 +7591,42 @@ export default function AdminPage() {
             </Card>
           </div>
 
+          {/* Admin Alerts Section */}
+          <div className="mb-8">
+            <AdminAlerts />
+          </div>
+
           {/* Main Content */}
-          <Tabs defaultValue="templates" className="space-y-6">
-            <TabsList className="grid w-full grid-cols-5">
-              <TabsTrigger value="templates">Templates</TabsTrigger>
-              <TabsTrigger value="products">Products</TabsTrigger>
-              <TabsTrigger value="add-product">Add Product</TabsTrigger>
-              <TabsTrigger value="bulk-upload">Bulk Upload</TabsTrigger>
-              <TabsTrigger value="categories">Categories</TabsTrigger>
-            </TabsList>
+          <Tabs value={adminTab} onValueChange={(value) => { setAdminTab(value as AdminTabValue); if (value === 'telegram-stars') checkTgWalletBalance() }} className="space-y-6">
+            <div className="rounded-xl border border-border bg-card/70 p-3 shadow-sm md:hidden">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Admin menu</p>
+              <Select value={adminTab} onValueChange={(value) => { setAdminTab(value as AdminTabValue); if (value === 'telegram-stars') checkTgWalletBalance() }}>
+                <SelectTrigger className="h-11">
+                  <SelectValue placeholder="Choose admin section" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ADMIN_TABS.map((tab) => (
+                    <SelectItem key={tab.value} value={tab.value}>
+                      {tab.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="hidden w-full pb-2 md:block">
+              <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 rounded-2xl p-2">
+                {ADMIN_TABS.map((tab) => (
+                  <TabsTrigger key={tab.value} value={tab.value} className="min-w-[120px] flex-1 px-3 text-xs lg:flex-none lg:text-sm">
+                    <span className="truncate">{tab.label}</span>
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </div>
+
+            <TabsContent value="pocketfi-payments" className="space-y-6">
+              <PocketfiPaymentChecker admin active={adminTab === 'pocketfi-payments'} />
+            </TabsContent>
 
             {/* Product Templates Management */}
             <TabsContent value="templates" className="space-y-6">
@@ -932,42 +7710,60 @@ export default function AdminPage() {
                         productGroups.map((template) => {
                           const category = categories.find(cat => cat.id === template.category_id)
                           const isArchived = template.is_active === false
+                          const isFavorite = favoriteProductGroupIds.includes(template.id)
                           return (
                             <div
                               key={template.id}
-                              className={`flex items-center justify-between p-4 border rounded-lg ${isArchived ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75' : ''}`}
+                              className={`flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border rounded-lg gap-3 ${isArchived ? 'bg-gray-50 dark:bg-gray-800/50 opacity-75' : ''}`}
                             >
-                              <div className="flex-1">
-                                <div className="flex items-center gap-3 mb-2">
-                                  <h4 className={`font-medium ${isArchived ? 'text-gray-500' : ''}`}>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex flex-wrap items-center gap-2 mb-2">
+                                  <h4 className={`font-medium break-words ${isArchived ? 'text-gray-500' : ''}`}>
                                     {template.name}
                                   </h4>
-                                  <Badge variant="outline">{category?.name || 'Unknown'}</Badge>
+                                  <Badge variant="outline" className="whitespace-nowrap">{category?.name || 'Unknown'}</Badge>
                                   {isArchived && (
                                     <Badge variant="secondary">Archived</Badge>
                                   )}
-                                  <Badge variant={template.stock_count > 0 ? 'default' : 'secondary'}>
+                                  {isFavorite && (
+                                    <Badge variant="secondary" className="gap-1 bg-yellow-100 text-yellow-800 dark:bg-yellow-950 dark:text-yellow-200">
+                                      <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
+                                      Favorite
+                                    </Badge>
+                                  )}
+                                  <Badge variant={template.stock_count > 0 ? 'default' : 'secondary'} className="whitespace-nowrap">
                                     {template.stock_count} in stock
                                   </Badge>
                                 </div>
-                                <p className={`text-sm text-muted-foreground ${isArchived ? 'text-gray-400' : ''}`}>
+                                <p className={`text-sm text-muted-foreground break-words ${isArchived ? 'text-gray-400' : ''}`}>
                                   {template.description} • ₦{template.price.toLocaleString()}
                                 </p>
                               </div>
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap sm:flex-shrink-0">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleToggleFavoriteTemplate(template.id)}
+                                  title={isFavorite ? 'Remove from customer favorites' : 'Add to customer favorites'}
+                                  className="whitespace-nowrap"
+                                >
+                                  <Star className={`h-4 w-4 sm:mr-1 ${isFavorite ? 'fill-yellow-400 text-yellow-500' : 'text-muted-foreground'}`} />
+                                  <span className="hidden sm:inline">{isFavorite ? 'Favorited' : 'Favorite'}</span>
+                                </Button>
                                 <Button 
                                   variant="outline" 
                                   size="sm"
                                   onClick={() => handleEditTemplate(template)}
                                 >
-                                  <Edit className="h-4 w-4" />
+                                  <Edit className="h-4 w-4 sm:mr-1" />
+                                  <span className="hidden sm:inline">Edit</span>
                                 </Button>
                                 {isArchived ? (
                                   <Button 
                                     variant="outline" 
                                     size="sm"
                                     onClick={() => handleRestoreTemplate(template.id)}
-                                    className="text-green-600 hover:text-green-700"
+                                    className="text-green-600 hover:text-green-700 whitespace-nowrap"
                                   >
                                     Restore
                                   </Button>
@@ -977,7 +7773,7 @@ export default function AdminPage() {
                                       variant="outline" 
                                       size="sm"
                                       onClick={() => handleArchiveTemplate(template.id)}
-                                      className="text-orange-600 hover:text-orange-700"
+                                      className="text-orange-600 hover:text-orange-700 whitespace-nowrap"
                                     >
                                       Archive
                                     </Button>
@@ -1002,18 +7798,169 @@ export default function AdminPage() {
               </Card>
             </TabsContent>
 
+            <TabsContent value="international-airtime" className="space-y-6">
+              <BitrefillPricingAdmin kind="airtime" active={adminTab === 'international-airtime'} />
+            </TabsContent>
+            <TabsContent value="gift-card-pricing" className="space-y-6">
+              <BitrefillPricingAdmin kind="gift_card" active={adminTab === 'gift-card-pricing'} />
+              <p className="text-sm text-muted-foreground">Gift card purchasing remains coming soon. These pricing rules do not enable purchases.</p>
+            </TabsContent>
+
+            {/* SMS Product Curation */}
+            <TabsContent value="sms-products" className="space-y-6">
+              <BitrefillPricingAdmin kind="sms" active={adminTab === 'sms-products'} />
+              <div className="rounded-xl border border-primary/25 bg-primary/5 px-4 py-3 text-sm">
+                <p className="font-semibold">Which SMS price applies?</p>
+                <p className="mt-1 text-muted-foreground">
+                  Saved markup rules above take priority and always round each number up to the next ₦10.
+                  The legacy controls below apply only to services without an active markup rule.
+                  Changing a legacy price does not replace a saved markup rule.
+                </p>
+              </div>
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <PhoneCall className="h-5 w-5 text-primary" />
+                        SMS Products
+                      </CardTitle>
+                      <p className="text-muted-foreground">
+                        Enable what customers can buy, set favorites, and manage legacy prices for services without a saved markup rule.
+                      </p>
+                    </div>
+                    <Button type="button" variant="outline" onClick={loadSmsProducts} disabled={smsProductsLoading}>
+                      {smsProductsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                      Sync SMS
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <Badge variant="outline" className="rounded-md px-3 py-2">
+                      Showing provider cost in NGN
+                    </Badge>
+                    <div className="relative min-w-[220px] flex-1">
+                      <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        value={smsSearchQuery}
+                        onChange={(event) => setSmsSearchQuery(event.target.value)}
+                        placeholder="Search products..."
+                        className="pl-9"
+                      />
+                    </div>
+                    <Input
+                      type="number"
+                      min="0"
+                      value={smsGlobalMargin}
+                      onChange={(event) => setSmsGlobalMargin(event.target.value)}
+                      placeholder="NGN e.g. 1000"
+                      className="w-40"
+                    />
+                    <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Checkbox
+                        checked={smsKeepAutoApply}
+                        onCheckedChange={(checked) => setSmsKeepAutoApply(checked === true)}
+                      />
+                      Keep auto-applying on future syncs
+                    </label>
+                    <Button type="button" variant="outline" disabled={smsSavingKey === 'global-markup'} onClick={applySmsGlobalMarkup}>
+                      {smsSavingKey === 'global-markup' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Apply legacy markup
+                    </Button>
+                    <Button
+                      type="button"
+                      variant={smsRoundToNearestTen ? 'default' : 'outline'}
+                      disabled={smsSavingKey === 'round-to-10'}
+                      onClick={toggleSmsRounding}
+                      title="Round legacy auto-markup prices up to the next ₦10. Saved markup rules above already include this rounding."
+                    >
+                      {smsSavingKey === 'round-to-10' ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Legacy rounding
+                    </Button>
+                    <Button type="button" variant="outline" disabled={smsSavingKey === 'enable-all'} onClick={() => bulkToggleSmsProducts(true)}>
+                      Enable all ({smsProducts.length})
+                    </Button>
+                    <Button type="button" variant="outline" disabled={smsSavingKey === 'disable-all'} onClick={() => bulkToggleSmsProducts(false)}>
+                      Disable all ({smsProducts.length})
+                    </Button>
+                  </div>
+
+                  {(smsCatalogNotice || smsDiagnostics) && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                      <p className="font-semibold">{smsCatalogNotice || 'SMS sync diagnostics'}</p>
+                      {smsDiagnostics && (
+                        <p className="mt-1 text-xs opacity-90">
+                          Host: {smsDiagnostics.provider_host || 'unknown'} · Rate source: {smsExchangeRateSource} · Legacy rounding: {smsRoundToNearestTen ? 'up to 10' : 'off'} · Country: {smsDiagnostics.country_id || 'unknown'} · getPricesVerification: {smsDiagnostics.verification_services ?? 0} · getPrices: {smsDiagnostics.prices_services ?? 0}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="rounded-lg border border-yellow-200 bg-yellow-50/40">
+                    <div className="flex items-center justify-between border-b border-yellow-200 px-4 py-3">
+                      <h3 className="flex items-center gap-2 font-semibold text-yellow-900">
+                        <Star className="h-4 w-4 fill-yellow-400 text-yellow-500" />
+                        Favorites ({favoriteSmsProducts.length})
+                      </h3>
+                    </div>
+                    <div className="px-4">
+                      {smsProductsLoading && smsProducts.length === 0 ? (
+                        <div className="flex items-center justify-center py-10 text-muted-foreground">
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Loading SMS products...
+                        </div>
+                      ) : favoriteSmsProducts.length === 0 ? (
+                        <p className="py-6 text-sm text-muted-foreground">No favorites yet. Star products below to push them up on the customer list.</p>
+                      ) : (
+                        favoriteSmsProducts.map(renderSmsProductRow)
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border">
+                    <div className="grid gap-4 border-b bg-muted/40 px-4 py-3 text-xs font-semibold uppercase text-muted-foreground lg:grid-cols-[minmax(180px,1.3fr)_220px_minmax(240px,1fr)_90px]">
+                      <span>Product</span>
+                      <span>Cost</span>
+                      <span>Legacy price override</span>
+                      <span className="lg:text-right">Enabled</span>
+                    </div>
+                    <div className="px-4">
+                      {smsProductsLoading && smsProducts.length === 0 ? (
+                        <div className="flex items-center justify-center py-12 text-muted-foreground">
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          Syncing SMS products...
+                        </div>
+                      ) : filteredSmsProducts.length === 0 ? (
+                        <p className="py-10 text-center text-sm text-muted-foreground">No SMS products match your search.</p>
+                      ) : (
+                        filteredSmsProducts.map(renderSmsProductRow)
+                      )}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
             {/* Products Management */}
             <TabsContent value="products" className="space-y-6">
               <Card>
                 <CardHeader>
                   <CardTitle>Product Management</CardTitle>
                   <p className="text-muted-foreground">
-                    View and manage all products in your inventory ({individualAccounts.length} total accounts)
+                    View and manage all products in your inventory ({individualAccountsCount.toLocaleString()} total accounts)
                   </p>
                 </CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {individualAccounts.length === 0 ? (
+                    {individualAccountsLoading ? (
+                      <div className="flex items-center justify-center py-8 text-muted-foreground"><Loader2 className="mr-2 h-4 w-4 animate-spin" />Loading inventory accounts...</div>
+                    ) : individualAccountsError ? (
+                      <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/40 p-4 text-sm">
+                        <span>{individualAccountsError}</span>
+                        <Button type="button" size="sm" variant="outline" onClick={() => setIndividualAccountsReload(value => value + 1)}>Retry</Button>
+                      </div>
+                    ) : individualAccounts.length === 0 ? (
                       <div className="text-center py-8 text-muted-foreground">
                         <ShoppingBag className="h-12 w-12 mx-auto mb-4 opacity-50" />
                         <p>No products found. Add some products using the tabs above.</p>
@@ -1026,34 +7973,35 @@ export default function AdminPage() {
                         return (
                           <div
                             key={account.id}
-                            className="flex items-center justify-between p-4 border rounded-lg"
+                            className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border rounded-lg gap-4"
                           >
-                            <div className="flex-1">
-                              <div className="flex items-center gap-3 mb-2">
-                                <h3 className="font-medium">@{account.username}</h3>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex flex-wrap items-center gap-2 mb-2">
+                                <h3 className="font-medium break-all">@{account.username}</h3>
                                 <Badge variant={account.status === 'available' ? 'default' : account.status === 'sold' ? 'secondary' : 'destructive'}>
                                   {account.status}
                                 </Badge>
                                 {account.additional_info?.followers && (
-                                  <Badge variant="outline">{parseInt(account.additional_info.followers).toLocaleString()} followers</Badge>
+                                  <Badge variant="outline" className="whitespace-nowrap">{parseInt(account.additional_info.followers).toLocaleString()} followers</Badge>
                                 )}
                               </div>
-                              <div className="text-sm text-muted-foreground space-x-4">
-                                <span>Category: {category?.name || 'Unknown'}</span>
-                                <span>Price: ₦{productGroup?.price?.toLocaleString() || '0'}</span>
-                                <span>Added: {new Date(account.created_at).toLocaleDateString()}</span>
-                                {account.email && <span>Email: {account.email}</span>}
+                              <div className="text-sm text-muted-foreground space-y-1 sm:space-y-0 sm:space-x-4">
+                                <span className="block sm:inline">Category: {category?.name || 'Unknown'}</span>
+                                <span className="block sm:inline">Price: ₦{productGroup?.price?.toLocaleString() || '0'}</span>
+                                <span className="block sm:inline">Added: {new Date(account.created_at).toLocaleDateString()}</span>
+                                {account.email && <span className="block sm:inline break-all">Email: {account.email}</span>}
                               </div>
                             </div>
                             
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 sm:flex-shrink-0">
                               <Button 
                                 variant="outline" 
                                 size="sm"
                                 onClick={() => handleViewAccount(account)}
                                 title="View details"
                               >
-                                <Eye className="h-4 w-4" />
+                                <Eye className="h-4 w-4 sm:mr-1" />
+                                <span className="hidden sm:inline">View</span>
                               </Button>
                               <Button 
                                 variant="outline" 
@@ -1061,7 +8009,8 @@ export default function AdminPage() {
                                 onClick={() => handleEditAccount(account)}
                                 title="Edit account"
                               >
-                                <Edit className="h-4 w-4" />
+                                <Edit className="h-4 w-4 sm:mr-1" />
+                                <span className="hidden sm:inline">Edit</span>
                               </Button>
                               <Button 
                                 variant="outline" 
@@ -1076,6 +8025,15 @@ export default function AdminPage() {
                           </div>
                         )
                       })
+                    )}
+                    {!individualAccountsLoading && !individualAccountsError && individualAccountsCount > 0 && (
+                      <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4 text-sm text-muted-foreground">
+                        <span>Showing {(individualAccountsPage * 100 + 1).toLocaleString()}–{(individualAccountsPage * 100 + individualAccounts.length).toLocaleString()} of {individualAccountsCount.toLocaleString()} accounts</span>
+                        <div className="flex gap-2">
+                          <Button type="button" size="sm" variant="outline" disabled={individualAccountsPage === 0} onClick={() => setIndividualAccountsPage(page => page - 1)}>Previous</Button>
+                          <Button type="button" size="sm" variant="outline" disabled={(individualAccountsPage + 1) * 100 >= individualAccountsCount} onClick={() => setIndividualAccountsPage(page => page + 1)}>Next</Button>
+                        </div>
+                      </div>
                     )}
                   </div>
                 </CardContent>
@@ -1199,7 +8157,7 @@ export default function AdminPage() {
                     Bulk Account Upload
                   </CardTitle>
                   <p className="text-muted-foreground">
-                    Upload CSV files with account credentials to an existing product template
+                    Upload CSV or TXT files with account credentials to an existing product template
                   </p>
                 </CardHeader>
                 <CardContent className="space-y-6">
@@ -1232,16 +8190,45 @@ export default function AdminPage() {
                     )}
                   </div>
 
+                  {/* Format picker */}
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Account Format</p>
+                    <div className="flex flex-wrap gap-2">
+                      {[{ key: 'auto', label: 'Auto-detect' }, ...Object.entries(SITE_FORMATS).map(([key, f]) => ({ key, label: f.label }))].map(({ key, label }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => {
+                            if (key !== csvFormat) {
+                              setCsvReview(null)
+                              setCsvFormat(key)
+                            }
+                          }}
+                          className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${csvFormat === key ? 'border-primary bg-primary text-primary-foreground' : 'border-border text-muted-foreground hover:border-primary/50 hover:text-foreground'}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="rounded px-3 py-2 bg-muted text-xs font-mono text-muted-foreground">
+                      {csvFormat === 'auto'
+                        ? 'Separator (: or |) and columns detected automatically from the file'
+                        : SITE_FORMATS[csvFormat]?.fields.join(` ${SITE_FORMATS[csvFormat].sep} `)
+                      }
+                    </div>
+                  </div>
+
                   <div className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-8 text-center">
                     <Upload className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                    <h3 className="text-lg font-medium mb-2">Upload CSV File</h3>
+                    <h3 className="text-lg font-medium mb-2">Upload CSV or TXT File</h3>
                     <p className="text-muted-foreground mb-4">
-                      Choose a CSV file with account credentials
+                      The system auto-detects CSV headers or TXT credential lines.
                     </p>
                     
                     <input
+                      key={csvFile ? `${csvFile.name}-${csvFile.lastModified}` : 'empty'}
                       type="file"
-                      accept=".csv"
+                      accept=".csv,.txt"
                       onChange={handleCsvFileChange}
                       className="mb-4"
                     />
@@ -1256,28 +8243,85 @@ export default function AdminPage() {
                     )}
                   </div>
 
+                  {csvReviewLoading && <p className="text-sm text-muted-foreground">Checking the file...</p>}
+                  {csvReviewError && <p role="alert" className="text-sm text-destructive">{csvReviewError}</p>}
+                  {csvReview && selectedCsvSummary && (
+                    <div className="space-y-3 rounded-lg border bg-muted/30 p-4 text-sm">
+                      <div>
+                        <p className="font-semibold">Review before adding accounts</p>
+                        <p className="text-xs text-muted-foreground">
+                          {csvReview.formatLabel} · {csvReview.nonEmptyRows.toLocaleString()} non-empty file rows · {selectedCsvSummary.validRows.toLocaleString()} accounts ready
+                        </p>
+                        <p className="text-xs text-muted-foreground">Destination: {productGroups.find(pg => pg.id === selectedTemplate)?.name || 'Select a product template above'}</p>
+                      </div>
+                      {csvReview.nonEmptyRows === 0 && <p role="alert" className="text-xs text-destructive">The file has no non-empty rows.</p>}
+                      <label className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={csvSkipHeader}
+                          disabled={csvReview.requiresCsvHeader}
+                          onChange={event => setCsvSkipHeader(event.target.checked)}
+                          className="mt-1"
+                        />
+                        <span>
+                          Skip first row as a header
+                          <span className="block text-xs text-muted-foreground">
+                            {csvReview.requiresCsvHeader
+                              ? 'Comma-separated CSV requires a header, which is skipped automatically.'
+                              : csvReview.likelyHeader
+                              ? 'The first row looks like column names. Check this choice before uploading.'
+                              : 'Turn this on only if the first row contains column names.'}
+                          </span>
+                        </span>
+                      </label>
+                      {selectedCsvSummary.preview.length > 0 && (
+                        <div>
+                          <p className="mb-1 text-xs font-medium">Sample rows (values hidden)</p>
+                          <ul className="space-y-1 text-xs text-muted-foreground">
+                            {selectedCsvSummary.preview.map(row => (
+                              <li key={row.sampleNumber}>
+                                Sample {row.sampleNumber}: login {row.hasLogin ? 'present' : 'missing'} · password {row.hasPassword ? 'present' : 'missing'} · email {row.hasEmail ? 'present' : 'not provided'}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {selectedCsvSummary.duplicateRows > 0 && (
+                        <p className="text-xs text-amber-700 dark:text-amber-300">
+                          {selectedCsvSummary.duplicateRows.toLocaleString()} repeated file row(s). This form does not remove them; check that they are intentional.
+                        </p>
+                      )}
+                      {selectedCsvSummary.invalidRows > 0 && (
+                        <p role="alert" className="text-xs text-destructive">{selectedCsvSummary.invalidRows.toLocaleString()} row(s) have no login or password. Correct the file before uploading.</p>
+                      )}
+                      {selectedCsvSummary.sourceRows > MAX_ADMIN_IMPORT_ROWS && (
+                        <p role="alert" className="text-xs text-destructive">Maximum {MAX_ADMIN_IMPORT_ROWS.toLocaleString()} rows per file. Split this upload into smaller files.</p>
+                      )}
+                    </div>
+                  )}
+
                   <div className="space-y-4">
-                    <h4 className="font-medium">CSV Format Requirements:</h4>
+                    <h4 className="font-medium">CSV/TXT Format Requirements:</h4>
                     <div className="bg-muted p-4 rounded-lg text-sm">
-                      <p className="font-medium mb-2">Required columns:</p>
+                      <p className="font-medium mb-2">CSV headers:</p>
                       <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-                        <li><strong>password</strong> - Account password (required)</li>
-                        <li><strong>email</strong> OR <strong>username</strong> - Account identifier (at least one required)</li>
+                        <li><strong>password</strong> - account password</li>
+                        <li><strong>email</strong> OR <strong>username</strong> - account identifier</li>
+                        <li><strong>two_fa_code</strong> and <strong>email_password</strong> are auto-detected, including escaped underscore headers.</li>
                       </ul>
-                      <p className="font-medium mb-2 mt-4">Optional columns:</p>
+                      <p className="font-medium mb-2 mt-4">TXT lines:</p>
                       <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-                        <li><strong>email_password</strong> - Email account password</li>
-                        <li><strong>two_fa</strong> or <strong>two_fa_code</strong> - Two-factor authentication code</li>
-                        <li><strong>username</strong> - Account username (if email is primary identifier)</li>
+                        <li><strong>username:password</strong> or <strong>username|password</strong></li>
+                        <li>Longer rows can include email, email password, recovery email, 2FA, year, and friends count by position.</li>
                       </ul>
                       <div className="mt-4 p-3 bg-blue-50 dark:bg-blue-950 rounded border border-blue-200 dark:border-blue-800">
                         <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
-                          💡 Sample CSV format:
+                          Sample CSV format:
                         </p>
                         <code className="text-xs text-blue-700 dark:text-blue-300 block mt-1">
-                          username,password,email,email_password,two_fa<br/>
-                          john_doe,pass123,john@email.com,emailpass123,123456<br/>
-                          jane_smith,mypass,jane@email.com,,
+                          username,password,two_fa_code,email,email_password<br/>
+                          john_doe,pass123,123456,john@email.com,emailpass123<br/>
+                          jane_smith,mypass,,jane@email.com,emailpass456
                         </code>
                       </div>
                     </div>
@@ -1285,12 +8329,202 @@ export default function AdminPage() {
 
                   <Button 
                     onClick={handleCsvUpload} 
-                    disabled={!csvFile || !selectedTemplate}
+                    disabled={csvUploading || csvReviewLoading || !csvFile || !selectedTemplate || !selectedCsvSummary || selectedCsvSummary.validRows === 0 || selectedCsvSummary.invalidRows > 0 || selectedCsvSummary.sourceRows > MAX_ADMIN_IMPORT_ROWS}
                     className="w-full"
                   >
-                    <Upload className="h-4 w-4 mr-2" />
-                    Upload Accounts to Template
+                    {csvUploading ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+                    Confirm upload to template
                   </Button>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Discount Codes / Flash Sales */}
+            <TabsContent value="discount-codes" className="space-y-6">
+              <div className="bg-amber-100 dark:bg-amber-900/30 border border-amber-300 dark:border-amber-800 rounded-md p-3 text-sm text-amber-800 dark:text-amber-300">
+                Paused store-wide (alongside bulk quantity discounts) while a better bundle/promo solution is worked out.
+                Codes created here still save to the database, but checkout won't apply them until DISCOUNTS_ENABLED is flipped back on.
+              </div>
+              <Card>
+                <CardHeader>
+                  <CardTitle>Create Discount Code</CardTitle>
+                  <p className="text-muted-foreground">
+                    Store-wide, category, or single-product codes. Validated and applied server-side at checkout.
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Code</label>
+                      <Input
+                        value={newCode}
+                        onChange={(e) => setNewCode(e.target.value.toUpperCase())}
+                        placeholder="e.g. SAVE20"
+                        className="uppercase"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Percent Off (1-100)</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        max={100}
+                        value={newCodePercent}
+                        onChange={(e) => setNewCodePercent(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Applies To</label>
+                    <Select value={newCodeScope} onValueChange={(v: any) => setNewCodeScope(v)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="store">Entire Store</SelectItem>
+                        <SelectItem value="category">One Category</SelectItem>
+                        <SelectItem value="product">One Product</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {newCodeScope === 'category' && (
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Category</label>
+                      <Select value={newCodeCategoryId} onValueChange={setNewCodeCategoryId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a category" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {categories.map((cat) => (
+                            <SelectItem key={cat.id} value={cat.id}>{cat.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  {newCodeScope === 'product' && (
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Product</label>
+                      <Select value={newCodeProductGroupId} onValueChange={setNewCodeProductGroupId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select a product" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {productGroups.map((pg) => (
+                            <SelectItem key={pg.id} value={pg.id}>{pg.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Max Uses (optional)</label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={newCodeMaxUses}
+                        onChange={(e) => setNewCodeMaxUses(e.target.value)}
+                        placeholder="Unlimited"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-sm font-medium mb-1 block">Expires At (optional)</label>
+                      <Input
+                        type="datetime-local"
+                        value={newCodeExpiresAt}
+                        onChange={(e) => setNewCodeExpiresAt(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  <Button onClick={handleCreateDiscountCode} disabled={isCreatingCode} className="w-full">
+                    {isCreatingCode ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                    Create Discount Code
+                  </Button>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle>Existing Codes</CardTitle>
+                    <Button variant="outline" size="sm" onClick={loadDiscountCodes} disabled={isLoadingCodes}>
+                      <RefreshCw className={`h-4 w-4 mr-1 ${isLoadingCodes ? 'animate-spin' : ''}`} /> Refresh
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  {discountCodes.length === 0 ? (
+                    <div className="text-center py-12 text-muted-foreground">
+                      <Tag className="h-10 w-10 mx-auto mb-3 opacity-40" />
+                      <p>No discount codes yet</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Code</TableHead>
+                            <TableHead>Off</TableHead>
+                            <TableHead>Scope</TableHead>
+                            <TableHead>Uses</TableHead>
+                            <TableHead>Expires</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead>Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {discountCodes.map((c) => {
+                            const scopeLabel = c.product_group_id
+                              ? productGroups.find(p => p.id === c.product_group_id)?.name || 'Product'
+                              : c.category_id
+                              ? categories.find(cat => cat.id === c.category_id)?.name || 'Category'
+                              : 'Entire Store'
+                            const expired = c.expires_at ? new Date(c.expires_at) < new Date() : false
+                            const usedUp = c.max_uses ? c.used_count >= c.max_uses : false
+                            return (
+                              <TableRow key={c.id}>
+                                <TableCell className="font-mono font-medium">{c.code}</TableCell>
+                                <TableCell>{c.percent_off}%</TableCell>
+                                <TableCell className="text-sm">{scopeLabel}</TableCell>
+                                <TableCell className="text-sm">
+                                  {c.used_count}{c.max_uses ? ` / ${c.max_uses}` : ''}
+                                </TableCell>
+                                <TableCell className="text-sm">
+                                  {c.expires_at ? format(new Date(c.expires_at), 'MMM d, yyyy') : 'Never'}
+                                </TableCell>
+                                <TableCell>
+                                  {!c.is_active ? (
+                                    <Badge variant="secondary">Disabled</Badge>
+                                  ) : expired ? (
+                                    <Badge variant="destructive">Expired</Badge>
+                                  ) : usedUp ? (
+                                    <Badge variant="destructive">Used Up</Badge>
+                                  ) : (
+                                    <Badge className="bg-green-600">Active</Badge>
+                                  )}
+                                </TableCell>
+                                <TableCell>
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleToggleCodeActive(c.id, !c.is_active)}
+                                  >
+                                    {c.is_active ? 'Disable' : 'Enable'}
+                                  </Button>
+                                </TableCell>
+                              </TableRow>
+                            )
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </TabsContent>
@@ -1309,23 +8543,24 @@ export default function AdminPage() {
                     {categories.map((category) => (
                       <div
                         key={category.id}
-                        className="flex items-center justify-between p-4 border rounded-lg"
+                        className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 border rounded-lg gap-3"
                       >
-                        <div>
-                          <h3 className="font-medium">{category.name}</h3>
-                          <p className="text-sm text-muted-foreground">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="font-medium break-words">{category.name}</h3>
+                          <p className="text-sm text-muted-foreground break-words">
                             {category.description} • {productGroups.filter(pg => pg.category_id === category.id).length} product groups
                           </p>
                         </div>
                         
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 sm:flex-shrink-0">
                           <Button 
                             variant="outline" 
                             size="sm"
                             onClick={() => handleEditCategory(category)}
                             title="Edit category"
                           >
-                            <Edit className="h-4 w-4" />
+                            <Edit className="h-4 w-4 sm:mr-1" />
+                            <span className="hidden sm:inline">Edit</span>
                           </Button>
                           <Button 
                             variant="outline" 
@@ -1370,7 +8605,3374 @@ export default function AdminPage() {
                 </CardContent>
               </Card>
             </TabsContent>
+
+            {/* Users Management */}
+            <TabsContent value="users" className="space-y-6">
+              {/* Search Bar */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>User Management</CardTitle>
+                  <p className="text-muted-foreground">
+                    Search users and manage wallet balances
+                  </p>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-2">
+                    <Input
+                      type="text"
+                      placeholder="Search by email, name, user ID, or account number..."
+                      value={userSearchQuery}
+                      onChange={(e) => setUserSearchQuery(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleSearchUsers()}
+                      className="flex-1"
+                    />
+                    <Button onClick={handleSearchUsers} disabled={isSearching}>
+                      <Search className="h-4 w-4 mr-2" />
+                      {isSearching ? 'Searching...' : 'Search'}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Users Table */}
+              <Card>
+                <CardContent className="p-0">
+                  {users.length === 0 ? (
+                    <div className="text-center py-16 px-4">
+                      <Search className="h-16 w-16 mx-auto mb-4 text-muted-foreground opacity-50" />
+                      <h3 className="text-lg font-semibold mb-2">Search for Users</h3>
+                      <p className="text-muted-foreground mb-4">
+                        Enter an email, name, user ID, or account number in the search box above to find users
+                      </p>
+                      <div className="inline-flex items-center gap-2 text-sm text-muted-foreground bg-muted px-4 py-2 rounded-lg">
+                        <kbd className="px-2 py-1 bg-background border rounded text-xs">Enter</kbd>
+                        <span>or click Search to begin</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Email</TableHead>
+                          <TableHead>Full Name</TableHead>
+                          <TableHead>Wallet Balance</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>Joined</TableHead>
+                          <TableHead>Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {users.map((user) => (
+                          <TableRow key={user.id}>
+                            <TableCell className="font-mono text-sm">
+                              {user.email}
+                            </TableCell>
+                            <TableCell>{user.full_name || '-'}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline" className="font-mono">
+                                ₦{(user.wallet_balance || 0).toLocaleString()}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {user.account_suspended ? (
+                                <Badge variant="destructive">Suspended</Badge>
+                              ) : user.wallet_review_required ? (
+                                <Badge className="bg-amber-500 text-white">Wallet review</Badge>
+                              ) : user.is_admin ? (
+                                <Badge>Admin</Badge>
+                              ) : user.is_staff ? (
+                                <Badge variant="outline">Staff</Badge>
+                              ) : (
+                                <Badge variant="secondary">Customer</Badge>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {format(new Date(user.created_at), 'MMM d, yyyy')}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex gap-2 whitespace-nowrap">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleViewUser(user)}
+                                >
+                                  <Eye className="h-4 w-4 md:mr-1" />
+                                  <span className="hidden md:inline">View</span>
+                                </Button>
+                                <Button
+                                  variant="default"
+                                  size="sm"
+                                  onClick={() => handleAdjustBalance(user)}
+                                  disabled={user.is_staff || user.is_admin}
+                                >
+                                  <DollarSign className="h-4 w-4 md:mr-1" />
+                                  <span className="hidden md:inline">Adjust</span>
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* User stats summary */}
+              <Card>
+                <CardContent className="p-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
+                    <div>
+                      <p className="text-2xl font-bold">{users.length}</p>
+                      <p className="text-sm text-muted-foreground">Total Users Shown</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold">
+                        ₦{users.reduce((sum, u) => sum + (u.wallet_balance || 0), 0).toLocaleString()}
+                      </p>
+                      <p className="text-sm text-muted-foreground">Total Balance</p>
+                    </div>
+                    <div>
+                      <p className="text-2xl font-bold">
+                        {users.filter(u => u.is_admin).length}
+                      </p>
+                      <p className="text-sm text-muted-foreground">Admins</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="balance" className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Customer Balances</CardTitle>
+                  <p className="text-sm text-muted-foreground">Stored wallet balances. Open a customer to see verified funding and confirmed spendable funds.</p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      aria-label="Filter customer balances by email"
+                      placeholder="Filter by email"
+                      value={balanceEmailInput}
+                      onChange={(event) => setBalanceEmailInput(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          setBalancePage(0)
+                          setBalanceEmailFilter(balanceEmailInput.trim())
+                        }
+                      }}
+                      className="min-w-[200px] flex-1"
+                    />
+                    <Button variant="outline" onClick={() => { setBalancePage(0); setBalanceEmailFilter(balanceEmailInput.trim()); setBalanceReload((value) => value + 1) }}>
+                      <Search className="mr-2 h-4 w-4" /> Search
+                    </Button>
+                    <Select value={balanceSort} onValueChange={(value) => { setBalancePage(0); setBalanceSort(value as CustomerBalanceSort) }}>
+                      <SelectTrigger className="w-[190px]" aria-label="Sort customer balances"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="balance_desc">Highest balance</SelectItem>
+                        <SelectItem value="balance_asc">Lowest balance</SelectItem>
+                        <SelectItem value="joined_newest">Newest registered</SelectItem>
+                        <SelectItem value="joined_oldest">Oldest registered</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button variant="outline" size="icon" aria-label="Refresh customer balances" title="Refresh customer balances" onClick={() => setBalanceReload((value) => value + 1)}>
+                      <RefreshCw className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  {balanceError && <p role="alert" className="text-sm text-destructive">{balanceError}</p>}
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader><TableRow>
+                        <TableHead>Customer</TableHead>
+                        <TableHead className="text-right">Stored balance</TableHead>
+                        <TableHead>Registered (London)</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Details</TableHead>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {!balanceLoading && !balanceError && balanceRows.length === 0 && (
+                          <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">No customers found.</TableCell></TableRow>
+                        )}
+                        {balanceLoading && <TableRow><TableCell colSpan={5} className="py-10 text-center text-muted-foreground">Loading balances...</TableCell></TableRow>}
+                        {!balanceLoading && !balanceError && balanceRows.map((customer) => (
+                          <TableRow key={customer.id}>
+                            <TableCell>
+                              <div className="font-medium">{customer.full_name || 'Unnamed customer'}</div>
+                              <div className="text-sm text-muted-foreground">{customer.email || customer.id}</div>
+                            </TableCell>
+                            <TableCell className="text-right font-mono tabular-nums">{formatAdminNaira(customer.wallet_balance)}</TableCell>
+                            <TableCell className="whitespace-nowrap text-sm">{formatRegistrationTime(customer.created_at)}</TableCell>
+                            <TableCell>{customer.account_suspended ? <Badge variant="destructive">Suspended</Badge> : customer.wallet_review_required ? <Badge variant="outline">Wallet review</Badge> : <Badge variant="secondary">Active</Badge>}</TableCell>
+                            <TableCell className="text-right"><Button variant="outline" size="sm" onClick={() => handleViewUser(customer)}><Eye className="mr-1 h-4 w-4" /> View</Button></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">
+                    <span>{balanceTotal.toLocaleString()} customers</span>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" disabled={balanceLoading || balancePage === 0} onClick={() => setBalancePage((page) => page - 1)}>Previous</Button>
+                      <span>Page {balancePage + 1} of {Math.max(1, Math.ceil(balanceTotal / 50))}</span>
+                      <Button variant="outline" size="sm" disabled={balanceLoading || (balancePage + 1) * 50 >= balanceTotal} onClick={() => setBalancePage((page) => page + 1)}>Next</Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Fraud Review */}
+            <TabsContent value="fraud" className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        <Shield className="h-5 w-5 text-primary" />
+                        Wallet Evidence Review
+                      </CardTitle>
+                      <p className="text-muted-foreground">
+                        Review account holds, payment conflicts, and historical balances without treating missing records as proof of misuse.
+                      </p>
+                      {fraudLastLoadedAt && (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Last scanned {formatDistanceToNow(new Date(fraudLastLoadedAt), { addSuffix: true })}
+                        </p>
+                      )}
+                    </div>
+                    <Button type="button" variant="outline" onClick={loadFraudReview} disabled={fraudLoading}>
+                      {fraudLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                      Scan wallets
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {fraudError && (
+                    <div className="rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
+                      <p className="font-semibold">Fraud review unavailable. No risk totals or customer classifications were calculated.</p>
+                      <p>{fraudError}</p>
+                    </div>
+                  )}
+                  {fraudTelemetryError && !fraudError && (
+                    <p className="text-sm text-destructive" role="status">
+                      IP/device search is unavailable. Financial review results remain complete. {fraudTelemetryError}
+                    </p>
+                  )}
+
+                  {!fraudLoading && !fraudError && fraudLastLoadedAt && (
+                    <>
+                      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+                        <div className="rounded-lg border p-3">
+                          <p className="text-2xl font-bold">{fraudFilterCounts.unblock}</p>
+                          <p className="text-xs text-muted-foreground">Spending blocked</p>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <p className="text-2xl font-bold">{fraudRows.filter(row => row.reviewType === 'overspent' || row.reviewType === 'suspended_risk').length}</p>
+                          <p className="text-xs text-muted-foreground">Integrity signals to review</p>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <p className="text-2xl font-bold">{fraudFilterCounts.excess}</p>
+                          <p className="text-xs text-muted-foreground">Unexplained wallet differences</p>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <p className="text-2xl font-bold">{fraudFilterCounts.duplicate}</p>
+                          <p className="text-xs text-muted-foreground">Payment conflicts</p>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <p className="text-2xl font-bold">{fraudFilterCounts.watchlist}</p>
+                          <p className="text-xs text-muted-foreground">Watchlist</p>
+                        </div>
+                        <div className="rounded-lg border p-3">
+                          <p className="text-2xl font-bold">{formatAdminNaira(fraudRows.reduce((sum, row) => sum + Math.max(row.exposure, 0), 0))}</p>
+                          <p className="text-xs text-muted-foreground">Difference requiring review</p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 rounded-lg border p-3">
+                        <div className="relative">
+                          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                          <Input
+                            value={fraudSearchQuery}
+                            onChange={(event) => setFraudSearchQuery(event.target.value)}
+                            placeholder="Search email, user ID, reason, or recent IP"
+                            className="pl-9"
+                          />
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {[
+                            ['all', 'All'],
+                            ['overspent', 'Integrity'],
+                            ['excess', 'Excess'],
+                            ['suspended', 'Suspended'],
+                            ['unblock', 'Holds'],
+                            ['review', 'Review flags'],
+                            ['duplicate', 'Duplicate'],
+                            ['watchlist', 'Watchlist'],
+                            ['historical', 'Funding history'],
+                            ['internal', 'Internal'],
+                          ].map(([id, label]) => {
+                            const filterId = id as typeof fraudReviewFilter
+                            return (
+                              <Button
+                                key={id}
+                                type="button"
+                                size="sm"
+                                variant={fraudReviewFilter === filterId ? 'default' : 'outline'}
+                                onClick={() => setFraudReviewFilter(filterId)}
+                              >
+                                {label}
+                                <Badge variant="secondary" className="ml-2">
+                                  {fraudFilterCounts[filterId]}
+                                </Badge>
+                              </Button>
+                            )
+                          })}
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                          Showing {filteredFraudRows.length} of {fraudRows.length} wallet review item(s).
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  {fraudError ? null : fraudLoading || !fraudLastLoadedAt ? (
+                    <div className="flex items-center justify-center gap-2 rounded-lg border p-8 text-muted-foreground">
+                      <Loader2 className="h-5 w-5 animate-spin" />
+                      Scanning accounts...
+                    </div>
+                  ) : fraudRows.length === 0 ? (
+                    <div className="rounded-lg border p-8 text-center">
+                      <CheckCircle2 className="mx-auto mb-3 h-10 w-10 text-emerald-500" />
+                      <p className="font-semibold">No fraud review items</p>
+                      <p className="text-sm text-muted-foreground">No account currently needs unblock review or risk attention.</p>
+                    </div>
+                  ) : filteredFraudRows.length === 0 ? (
+                    <div className="rounded-lg border p-8 text-center">
+                      <Search className="mx-auto mb-3 h-10 w-10 text-muted-foreground" />
+                      <p className="font-semibold">No matching fraud review items</p>
+                      <p className="text-sm text-muted-foreground">Change the search text or filter tab to see more results.</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Account</TableHead>
+                            <TableHead>Flag</TableHead>
+                            <TableHead>Ledger</TableHead>
+                            <TableHead>IP evidence</TableHead>
+                            <TableHead>Wallet</TableHead>
+                            <TableHead>Reason</TableHead>
+                            <TableHead>Actions</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {filteredFraudRows.map((row) => (
+                            <TableRow key={row.userId}>
+                              <TableCell>
+                                <div className="space-y-1">
+                                  <p className="font-mono text-sm">{row.email}</p>
+                                  {row.role !== 'customer' && <Badge variant="outline">{row.role === 'admin' ? 'Admin' : 'Staff'}</Badge>}
+                                  <p className="text-xs text-muted-foreground">{row.fullName || row.userId}</p>
+                                  {row.suspendedAt && (
+                                    <p className="text-xs text-muted-foreground">
+                                      Suspended {formatAdminDateWithRelative(row.suspendedAt)}
+                                    </p>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                {row.reviewType === 'review_unblock' ? (
+                                  <Badge className={row.walletReviewRequired ? 'bg-amber-500 text-white' : 'bg-emerald-600 text-white'}>
+                                    {row.suspended ? 'Account suspended' : row.truth.spending_blocked ? 'Wallet hold' : 'Review flag'}
+                                  </Badge>
+                                ) : row.reviewType === 'watchlist' ? (
+                                  <Badge variant="outline">Monitor</Badge>
+                                ) : row.reviewType === 'historical_funding' ? (
+                                  <Badge variant="outline">Funding history</Badge>
+                                ) : row.reviewType === 'quarantined_excess' ? (
+                                  <Badge variant="outline">Wallet difference</Badge>
+                                ) : row.reviewType === 'duplicate_deposit' && row.truth.integrity_status !== 'payment_identity_conflict' ? (
+                                  <Badge variant="outline">Payment ID review</Badge>
+                                ) : (
+                                  <Badge variant="destructive">
+                                    {row.reviewType === 'duplicate_deposit' ? 'Payment conflict' : row.suspended ? 'Suspended risk' : 'Integrity risk'}
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="min-w-[180px] text-sm">
+                                  <p>Trusted principal: {formatAdminNaira(row.trustedCredits)}</p>
+                                  <p>Approved admin credits: {formatAdminNaira(row.truth.approved_admin_credits)}</p>
+                                  {typeof row.truth.approved_historical_admin_credits === 'number' && row.truth.approved_historical_admin_credits > 0 && (
+                                    <p className="text-xs text-muted-foreground">
+                                      Of which owner-reviewed historical: {formatAdminNaira(row.truth.approved_historical_admin_credits)}
+                                    </p>
+                                  )}
+                                  {row.completedRefunds > 0 && (
+                                    <p className="text-xs text-emerald-600">
+                                      Eligible refund restore: {formatAdminNaira(row.eligibleRefunds)} / {formatAdminNaira(row.completedRefunds)}
+                                    </p>
+                                  )}
+                                  <p>Current purchase limit: {formatAdminNaira(row.trustedAvailable)}</p>
+                                  <p className="text-xs text-muted-foreground">Spending {row.truth.spending_blocked ? 'blocked' : 'permitted up to the current purchase limit'}</p>
+                                  <p>Active holds: {formatAdminNaira(row.truth.active_reservations)}</p>
+                                  <p>Debits net refunds: {formatAdminNaira(row.netSpend)}</p>
+                                  <p className="text-xs text-muted-foreground">Displayed above recorded backing: {formatAdminNaira(row.truth.quarantined_excess)}</p>
+                                  {row.trustedAvailable > Math.max(0, row.truth.trusted_book_balance) && (
+                                    <p className="text-xs font-medium text-amber-700">Legacy policy permits spending above recorded backing.</p>
+                                  )}
+                                  <p className="text-xs text-muted-foreground">Unexplained: {formatAdminNaira(row.truth.unexplained_difference)}</p>
+                                  <p className={row.exposure > 1 ? 'font-semibold text-destructive' : 'text-muted-foreground'}>
+                                    Difference: {formatAdminNaira(Math.max(row.exposure, 0))}
+                                  </p>
+                                  {row.spendRatio !== null && (
+                                    <p className="text-xs text-muted-foreground">Ratio: {Math.round(row.spendRatio * 100)}%</p>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="min-w-[180px] space-y-1 text-sm">
+                                  {row.lastIpAddress ? (
+                                    <>
+                                      <p className="break-all font-mono">{row.lastIpAddress}</p>
+                                      <p className="text-xs text-muted-foreground">IP telemetry, unverified</p>
+                                      {row.lastIpLocation && (
+                                        <p className="text-xs font-medium">{row.lastIpLocation}</p>
+                                      )}
+                                      {row.lastIpIsp && (
+                                        <p className="text-xs text-muted-foreground">{row.lastIpIsp}</p>
+                                      )}
+                                      <p className="text-xs font-medium">
+                                        {row.deviceLabel || 'Unknown device'}
+                                      </p>
+                                      <p className="text-xs text-muted-foreground">
+                                        {[row.deviceType, row.deviceOs, row.deviceBrowser].filter(Boolean).join(' · ') || 'Device unknown'}
+                                      </p>
+                                      {row.lastIpSeenAt && (
+                                        <p className="text-xs text-muted-foreground">
+                                          Seen {formatAdminDateWithRelative(row.lastIpSeenAt)}
+                                        </p>
+                                      )}
+                                      {row.ipAddresses.length > 1 && (
+                                        <p className="font-mono text-xs text-muted-foreground">
+                                          Also: {row.ipAddresses.filter(ip => ip !== row.lastIpAddress).slice(0, 3).join(', ')}
+                                        </p>
+                                      )}
+                                    </>
+                                  ) : (
+                                    <p className="text-xs text-muted-foreground">Open details for IP evidence</p>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Badge variant="outline">{formatAdminNaira(row.walletBalance)}</Badge>
+                              </TableCell>
+                              <TableCell>
+                                <div className="max-w-[320px] text-sm">
+                                  <p>{row.reason}</p>
+                                  {row.duplicateTopupReferences.length > 0 && (
+                                    <p className="mt-1 font-mono text-xs text-muted-foreground">
+                                      {row.duplicateTopupReferences.slice(0, 3).join(', ')}
+                                    </p>
+                                  )}
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-col gap-2">
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => {
+                                      const baseUser = users.find(user => user.id === row.userId) || {
+                                        id: row.userId,
+                                        email: row.email,
+                                        full_name: row.fullName,
+                                        wallet_balance: row.walletBalance,
+                                        account_suspended: row.suspended,
+                                        wallet_review_required: row.walletReviewRequired,
+                                        wallet_review_reason: row.walletReviewReason,
+                                        suspension_reason: row.suspensionReason,
+                                        suspended_at: row.suspendedAt,
+                                        is_admin: row.role === 'admin',
+                                        is_staff: row.role === 'staff',
+                                        created_at: new Date().toISOString(),
+                                      }
+                                      handleViewUser({
+                                        ...baseUser,
+                                        fraud_last_ip_address: row.lastIpAddress || '',
+                                        fraud_ip_addresses: row.ipAddresses,
+                                        fraud_last_ip_seen_at: row.lastIpSeenAt || '',
+                                        fraud_last_ip_location: row.lastIpLocation || '',
+                                        fraud_last_ip_isp: row.lastIpIsp || '',
+                                        fraud_last_user_agent: row.lastUserAgent || '',
+                                        fraud_device_label: row.deviceLabel || '',
+                                        fraud_device_type: row.deviceType || '',
+                                        fraud_device_os: row.deviceOs || '',
+                                        fraud_device_browser: row.deviceBrowser || '',
+                                      })
+                                    }}
+                                  >
+                                    <Eye className="mr-2 h-4 w-4" />
+                                    View
+                                  </Button>
+                                  {row.role === 'customer' && row.suspended && (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      onClick={() => handleUnsuspendFraudUser(row)}
+                                      disabled={fraudUnsuspendingUserId === row.userId}
+                                    >
+                                      {fraudUnsuspendingUserId === row.userId ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <UserCheck className="mr-2 h-4 w-4" />}
+                                      Unsuspend
+                                    </Button>
+                                  )}
+                                  {row.role === 'customer' && !row.suspended && (
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="destructive"
+                                      onClick={() => {
+                                        setSuspensionReason('')
+                                        setSuspensionEvidenceReviewed(false)
+                                        setSuspensionTarget({ id: row.userId, email: row.email })
+                                      }}
+                                      disabled={isSuspendingUser}
+                                    >
+                                      <UserX className="mr-2 h-4 w-4" />
+                                      Suspend
+                                    </Button>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Sales Intelligence */}
+            <TabsContent value="sales" className="space-y-6">
+              <Card className="overflow-hidden">
+                <CardHeader className="border-b bg-gradient-to-r from-emerald-50 via-white to-purple-50 dark:from-emerald-950/25 dark:via-card dark:to-purple-950/25">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2 text-2xl">
+                        <BarChart3 className="h-6 w-6 text-primary" />
+                        Sales Intelligence
+                      </CardTitle>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Best sellers, customer growth, visitor trends, targets, and automated product ranking signals.
+                      </p>
+                    </div>
+                    <Button type="button" variant="outline" onClick={loadSalesAnalytics} disabled={salesLoading}>
+                      {salesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                      Refresh sales data
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-6 p-4 md:p-6">
+                  {Object.keys(salesErrors).length > 0 && (
+                    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                      <p className="font-bold">Some sales sources need attention.</p>
+                      <div className="mt-2 grid gap-1 md:grid-cols-2">
+                        {Object.entries(salesErrors).map(([label, message]) => (
+                          <p key={label} className="break-words">
+                            <span className="font-semibold">{label}:</span> {message}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <Card className="bg-purple-50/80 dark:bg-purple-500/10">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-semibold text-muted-foreground">Total Sales Revenue</p>
+                          <DollarSign className="h-5 w-5 text-purple-600" />
+                        </div>
+                        <p className="mt-2 text-2xl font-black text-purple-700 dark:text-purple-300">{formatAdminNaira(salesAnalytics.totalRevenue)}</p>
+                        <p className="text-xs text-muted-foreground">{salesAnalytics.totalOrders.toLocaleString()} completed order(s)</p>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-emerald-50/80 dark:bg-emerald-500/10">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-semibold text-muted-foreground">Best Day</p>
+                          <TrendingUp className="h-5 w-5 text-emerald-600" />
+                        </div>
+                        <p className="mt-2 text-xl font-black text-emerald-700 dark:text-emerald-300">
+                          {salesAnalytics.bestDay ? formatAdminNaira(salesAnalytics.bestDay.revenue) : 'No sales yet'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {salesAnalytics.bestDay ? `${format(new Date(salesAnalytics.bestDay.date), 'MMM d, yyyy')} • ${salesAnalytics.bestDay.units} units` : 'Waiting for completed orders'}
+                        </p>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-cyan-50/80 dark:bg-cyan-500/10">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-semibold text-muted-foreground">Best Product</p>
+                          <ShoppingBag className="h-5 w-5 text-cyan-600" />
+                        </div>
+                        <p className="mt-2 truncate text-xl font-black text-cyan-700 dark:text-cyan-300">
+                          {salesAnalytics.bestProduct?.name || 'No product yet'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {salesAnalytics.bestProduct ? `${salesAnalytics.bestProduct.units} units • ${formatAdminNaira(salesAnalytics.bestProduct.revenue)}` : 'No completed product orders'}
+                        </p>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-orange-50/80 dark:bg-orange-500/10">
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-sm font-semibold text-muted-foreground">Best Customer</p>
+                          <Users className="h-5 w-5 text-orange-600" />
+                        </div>
+                        <p className="mt-2 truncate text-xl font-black text-orange-700 dark:text-orange-300">
+                          {salesAnalytics.bestCustomers[0]?.email || 'No customer yet'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {salesAnalytics.bestCustomers[0] ? `${formatAdminNaira(salesAnalytics.bestCustomers[0].revenue)} • ${salesAnalytics.bestCustomers[0].orders} orders` : 'No completed customer orders'}
+                        </p>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <Card className="border-purple-200/80 bg-purple-50/50 dark:border-purple-500/20 dark:bg-purple-500/10">
+                    <CardHeader className="gap-3 md:flex-row md:items-center md:justify-between">
+                      <CardTitle className="flex items-center gap-2">
+                        <Shield className="h-5 w-5 text-primary" />
+                        Revenue OS Health
+                      </CardTitle>
+                      <Button type="button" variant="outline" onClick={handleRunRevenueDataQualityScan} disabled={dataQualityScanning}>
+                        {dataQualityScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                        Run data scan
+                      </Button>
+                    </CardHeader>
+                    <CardContent className="grid gap-3 text-sm md:grid-cols-4 xl:grid-cols-10">
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Global status</p>
+                        <p className="mt-1 text-lg font-black">{croGlobalEnabled ? 'Active' : 'Paused'}</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Autonomy level</p>
+                        <p className="mt-1 text-lg font-black">{croAutonomyLevel}/8</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Events captured</p>
+                        <p className="mt-1 text-lg font-black">{revenueEvents.length.toLocaleString()}</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Decision audits</p>
+                        <p className="mt-1 text-lg font-black">{croDecisionRows.length.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">{croShadowModeEnabled ? 'Shadow mode on' : 'Live mode'}</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Experiments</p>
+                        <p className="mt-1 text-lg font-black">{revenueOsHealth.activeExperiments.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">running</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Insights</p>
+                        <p className="mt-1 text-lg font-black">{revenueOsHealth.activeInsights.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">active</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Relationships</p>
+                        <p className="mt-1 text-lg font-black">{revenueOsHealth.relationships.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">product graph</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Critical failures</p>
+                        <p className={cn('mt-1 text-lg font-black', revenueOsHealth.criticalFailures > 0 ? 'text-destructive' : 'text-emerald-600')}>
+                          {revenueOsHealth.criticalFailures.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-muted-foreground">latest scan</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Features</p>
+                        <p className="mt-1 text-lg font-black">{revenueOsHealth.featureSnapshots.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">snapshots</p>
+                      </div>
+                      <div className="rounded-xl border bg-background/70 p-3">
+                        <p className="text-xs font-semibold text-muted-foreground">Opportunities</p>
+                        <p className="mt-1 text-lg font-black">{revenueOsHealth.openOpportunities.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">open/watch</p>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Target className="h-5 w-5 text-primary" />
+                          Sales Target
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+                          <Input
+                            type="number"
+                            min="0"
+                            value={salesTargetInput}
+                            onChange={(event) => setSalesTargetInput(event.target.value)}
+                            placeholder="Monthly target in NGN"
+                          />
+                          <Button onClick={handleSaveSalesTarget} disabled={salesTargetSaving}>
+                            {salesTargetSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                            Save target
+                          </Button>
+                        </div>
+                        <div>
+                          <div className="mb-2 flex items-center justify-between text-sm">
+                            <span className="font-semibold">This month</span>
+                            <span className="text-muted-foreground">
+                              {formatAdminNaira(salesAnalytics.target.monthlyRevenue)} / {formatAdminNaira(salesAnalytics.target.monthlyTarget)}
+                            </span>
+                          </div>
+                          <div className="h-3 overflow-hidden rounded-full bg-muted">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-purple-600 to-emerald-500"
+                              style={{ width: `${salesAnalytics.target.progress}%` }}
+                            />
+                          </div>
+                          <p className="mt-2 text-xs text-muted-foreground">
+                            {salesAnalytics.target.monthlyTarget > 0
+                              ? `${salesAnalytics.target.progress.toFixed(1)}% complete • ${formatAdminNaira(salesAnalytics.target.remaining)} remaining`
+                              : 'Set a monthly target to track sales progress.'}
+                          </p>
+                        </div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <Sparkles className="h-5 w-5 text-primary" />
+                          Recommendation Automation
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-4">
+                        <div className="rounded-xl border p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <p className="font-bold">Revenue OS active</p>
+                              <p className="text-sm text-muted-foreground">
+                                Turn this off for the kill switch. Customer pages use safe default ranking and buying still works.
+                              </p>
+                            </div>
+                            <Switch
+                              checked={croGlobalEnabled}
+                              onCheckedChange={setCroGlobalEnabled}
+                              disabled={!!croMaintenanceFreezeReason}
+                            />
+                          </div>
+                          {croMaintenanceFreezeReason && (
+                            <p className="mt-2 text-xs font-semibold text-destructive">
+                              Frozen by guardrail: {croMaintenanceFreezeReason}
+                            </p>
+                          )}
+                          <div className="mt-3 rounded-xl border bg-background/70 p-3">
+                            <p className="text-xs font-bold uppercase text-muted-foreground">Immutable guardrails</p>
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {[
+                                'sellable products only',
+                                'no invented prices',
+                                'no fake scarcity',
+                                'no payment record changes',
+                                'support issues hand off',
+                                'holdout preserved',
+                              ].map((guardrail) => (
+                                <Badge key={guardrail} variant="outline" className="text-[10px]">
+                                  {guardrail}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_120px_120px_auto]">
+                            <label className="flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-sm">
+                              <span>
+                                <span className="block font-semibold">Shadow mode</span>
+                                <span className="text-xs text-muted-foreground">Audit decisions without changing ranking.</span>
+                              </span>
+                              <Switch checked={croShadowModeEnabled} onCheckedChange={setCroShadowModeEnabled} />
+                            </label>
+                            <Input
+                              type="number"
+                              min="0"
+                              max="8"
+                              value={croAutonomyLevel}
+                              onChange={(event) => setCroAutonomyLevel(event.target.value)}
+                              placeholder="Level"
+                            />
+                            <Input
+                              type="number"
+                              min="0"
+                              max="50"
+                              value={croGlobalHoldoutPct}
+                              onChange={(event) => setCroGlobalHoldoutPct(event.target.value)}
+                              placeholder="Holdout %"
+                            />
+                            <Button type="button" onClick={handleSaveCroControls} disabled={croControlSaving}>
+                              {croControlSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                              Save CRO
+                            </Button>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-muted/40 px-3 py-2 text-sm">
+                            <span>
+                              <span className="block font-semibold">Experiment assignment</span>
+                              <span className="text-xs text-muted-foreground">When on, running experiments can assign visitors to control or Revenue OS variants.</span>
+                            </span>
+                            <Switch checked={croExperimentationEnabled} onCheckedChange={setCroExperimentationEnabled} />
+                          </div>
+                          <div className="mt-3 rounded-xl border bg-background/70 p-3">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                              <div>
+                                <p className="font-bold">Scheduled maintenance</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Hourly Revenue OS refresh with data-quality freeze, action-plan generation, forecasts, and drift checks.
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Switch checked={croMaintenanceEnabled} disabled={croMaintenanceSaving} onCheckedChange={handleToggleCroMaintenance} />
+                                <Button type="button" size="sm" variant="outline" onClick={handleRunCroMaintenanceNow} disabled={croMaintenanceRunning}>
+                                  {croMaintenanceRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                  Run now
+                                </Button>
+                              </div>
+                            </div>
+                            <div className="mt-3 grid gap-2 text-xs sm:grid-cols-3">
+                              <div className="rounded-lg bg-muted/40 p-2">
+                                <p className="font-semibold text-muted-foreground">Last status</p>
+                                <p className={cn('mt-1 font-black capitalize', croMaintenanceLastStatus === 'failed' || croMaintenanceLastStatus === 'paused_cro' ? 'text-destructive' : 'text-emerald-600')}>
+                                  {croMaintenanceLastStatus.replace(/_/g, ' ')}
+                                </p>
+                              </div>
+                              <div className="rounded-lg bg-muted/40 p-2">
+                                <p className="font-semibold text-muted-foreground">Last run</p>
+                                <p className="mt-1 font-black">
+                                  {croMaintenanceLastRunAt ? formatDistanceToNow(new Date(croMaintenanceLastRunAt), { addSuffix: true }) : 'Never'}
+                                </p>
+                              </div>
+                              <div className="rounded-lg bg-muted/40 p-2">
+                                <p className="font-semibold text-muted-foreground">Last output</p>
+                                <p className="mt-1 font-black">
+                                  {Number(croMaintenanceLastSummary?.findings || 0).toLocaleString()} checks • {Number(croMaintenanceLastSummary?.action_plans || 0).toLocaleString()} plans • {Number(croMaintenanceLastSummary?.lifecycle_actions || 0).toLocaleString()} lifecycle
+                                </p>
+                              </div>
+                            </div>
+                            {croMaintenanceFreezeReason && (
+                              <p className="mt-2 rounded-lg border border-destructive/30 bg-destructive/10 p-2 text-xs text-destructive">
+                                Freeze reason: {croMaintenanceFreezeReason}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between gap-3 rounded-xl border p-4">
+                          <div>
+                            <p className="font-bold">Customer product switching</p>
+                            <p className="text-sm text-muted-foreground">
+                              Uses trending products, top buys, and personal purchase history to reorder customer product lists.
+                            </p>
+                          </div>
+                          <Switch
+                            checked={recommendationAutomationEnabled}
+                            disabled={recommendationAutomationSaving}
+                            onCheckedChange={handleToggleRecommendationAutomation}
+                          />
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                          <div className="rounded-xl border p-3">
+                            <p className="font-black text-lg">{salesAnalytics.highSellingProducts.length}</p>
+                            <p className="text-muted-foreground">Products ranked</p>
+                          </div>
+                          <div className="rounded-xl border p-3">
+                            <p className="font-black text-lg">{salesAnalytics.marketTrends.length}</p>
+                            <p className="text-muted-foreground">Trends found</p>
+                          </div>
+                          <div className="rounded-xl border p-3">
+                            <p className="font-black text-lg">{recommendationAutomationEnabled ? 'On' : 'Off'}</p>
+                            <p className="text-muted-foreground">Automation</p>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <AdminControlSection
+                    title="Revenue OS Safety & Knowledge"
+                    description="Audit the deterministic CRO layer before increasing autonomy. These records come from stored events, checks, experiments, and product relationships."
+                  >
+                    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="text-sm text-muted-foreground">
+                        Run these before raising autonomy: clean catalogue data first, then rebuild the product graph from live sellable products.
+                      </div>
+                      <div className="flex flex-col gap-2 sm:flex-row">
+                        <Button type="button" variant="outline" onClick={handleRunRevenueDataQualityScan} disabled={dataQualityScanning}>
+                          {dataQualityScanning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          Scan data
+                        </Button>
+                        <Button type="button" variant="outline" onClick={handleRebuildProductGraph} disabled={productGraphBuilding}>
+                          {productGraphBuilding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                          Rebuild graph
+                        </Button>
+                        <Button type="button" variant="outline" onClick={handleRefreshRuntimeIntelligence} disabled={runtimeIntelligenceRefreshing || salesLoading}>
+                          {runtimeIntelligenceRefreshing ? <Loader2 className="h-4 w-4 animate-spin" /> : <BarChart3 className="h-4 w-4" />}
+                          Refresh intelligence
+                        </Button>
+                        <Button type="button" variant="outline" onClick={handleRunRevenueEvaluation} disabled={evaluationRunning || salesLoading}>
+                          {evaluationRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Shield className="h-4 w-4" />}
+                          Run evaluation
+                        </Button>
+                      </div>
+                    </div>
+                    {revenueOsHealth.latestForecast && (
+                      <div className="mb-4 grid gap-3 rounded-2xl border bg-background/60 p-4 md:grid-cols-4">
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Monthly forecast</p>
+                          <p className="text-2xl font-black">{formatAdminNaira(Number(revenueOsHealth.latestForecast.median_value || 0))}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Forecast range</p>
+                          <p className="font-black">{formatAdminNaira(Number(revenueOsHealth.latestForecast.lower_bound || 0))} - {formatAdminNaira(Number(revenueOsHealth.latestForecast.upper_bound || 0))}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Target probability</p>
+                          <p className="font-black">
+                            {revenueOsHealth.latestForecast.probability_to_target == null
+                              ? 'No target'
+                              : `${Math.round(Number(revenueOsHealth.latestForecast.probability_to_target || 0) * 100)}%`}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Method</p>
+                          <p className="truncate font-black">{revenueOsHealth.latestForecast.method || 'DETERMINISTIC_TRAILING_RATE'}</p>
+                        </div>
+                      </div>
+                    )}
+                    <div className="mb-4 grid gap-3 md:grid-cols-5">
+                      <div className="rounded-2xl border bg-background/60 p-4">
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">Latest simulation</p>
+                        <p className={cn('mt-1 text-2xl font-black capitalize', revenueOsHealth.latestSimulation?.recommendation === 'pause' ? 'text-destructive' : revenueOsHealth.latestSimulation?.recommendation === 'safe' ? 'text-emerald-600' : '')}>
+                          {revenueOsHealth.latestSimulation?.recommendation || 'No run'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {(revenueOsHealth.latestSimulation?.decisions_evaluated || 0).toLocaleString()} decisions • {(revenueOsHealth.latestSimulation?.sessions_evaluated || 0).toLocaleString()} sessions
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border bg-background/60 p-4">
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">Latest drift</p>
+                        <p className={cn('mt-1 text-2xl font-black capitalize', revenueOsHealth.latestDrift?.status === 'drift' ? 'text-destructive' : revenueOsHealth.latestDrift?.status === 'stable' ? 'text-emerald-600' : '')}>
+                          {revenueOsHealth.latestDrift?.status || 'No check'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">Score {Number(revenueOsHealth.latestDrift?.drift_score || 0).toFixed(2)}</p>
+                      </div>
+                      <div className="rounded-2xl border bg-background/60 p-4">
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">Model registry</p>
+                        <p className="mt-1 text-2xl font-black">{revenueOsHealth.modelRegistryCount.toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">deterministic/model records</p>
+                      </div>
+                      <div className="rounded-2xl border bg-background/60 p-4">
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">Lifecycle engine</p>
+                        <p className="mt-1 text-2xl font-black">{Number(revenueOsHealth.lifecycleCustomerSnapshots || 0).toLocaleString()}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {Number(revenueOsHealth.lifecycleCounts?.AT_RISK || 0).toLocaleString()} at risk • {Number(revenueOsHealth.lifecycleCounts?.LAPSED || 0).toLocaleString()} lapsed
+                        </p>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          {Number(revenueOsHealth.customersWithNextCandidates || 0).toLocaleString()} with next-purchase candidates
+                        </p>
+                      </div>
+                      <div className="rounded-2xl border bg-background/60 p-4">
+                        <p className="text-xs font-semibold uppercase text-muted-foreground">Promotion guardrails</p>
+                        <p className={cn('mt-1 text-2xl font-black', revenueOsHealth.promotionFailures.length > 0 ? 'text-destructive' : 'text-emerald-600')}>
+                          {revenueOsHealth.promotionFailures.length > 0 ? revenueOsHealth.promotionFailures.length.toLocaleString() : 'Safe'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          max {Number(promotionMaxDiscountPct || 0)}% • budget {formatAdminNaira(Number(promotionMonthlyBudgetNgn || 0))}
+                        </p>
+                      </div>
+                    </div>
+                    {revenueOsHealth.latestAnomalies.length > 0 && (
+                      <div className="mb-4 rounded-2xl border bg-background/60 p-4">
+                        <div className="mb-3 flex items-center justify-between gap-3">
+                          <div>
+                            <p className="font-black">Anomaly Freeze Monitor</p>
+                            <p className="text-xs text-muted-foreground">Revenue, conversion, and payment-funnel anomalies that can pause CRO automatically.</p>
+                          </div>
+                          <Badge variant={revenueOsHealth.latestAnomalies.some((row) => row.status === 'drift') ? 'destructive' : 'outline'}>
+                            {revenueOsHealth.latestAnomalies.some((row) => row.status === 'drift') ? 'Freeze risk' : 'Watching'}
+                          </Badge>
+                        </div>
+                        <div className="grid gap-3 md:grid-cols-3">
+                          {revenueOsHealth.latestAnomalies.slice(0, 3).map((row) => (
+                            <div key={row.id || row.check_key} className="rounded-xl border p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-sm font-black">{String(row.model_key || '').replace(/_/g, ' ')}</p>
+                                <Badge variant={row.status === 'drift' ? 'destructive' : row.status === 'watch' ? 'secondary' : 'outline'} className="capitalize">
+                                  {row.status}
+                                </Badge>
+                              </div>
+                              <p className="mt-2 text-xs text-muted-foreground">Score {Number(row.drift_score || 0).toFixed(2)}</p>
+                              {row.evidence && (
+                                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                  {Object.entries(row.evidence).slice(0, 2).map(([key, value]) => `${key}: ${Number.isFinite(Number(value)) ? Number(value).toLocaleString() : String(value)}`).join(' • ')}
+                                </p>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div className="grid gap-4 xl:grid-cols-4">
+                      <div className="space-y-3 rounded-2xl border bg-background/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-black">Data Quality</p>
+                          <Badge variant={revenueOsHealth.criticalFailures > 0 ? 'destructive' : 'outline'}>
+                            {revenueOsHealth.criticalFailures > 0 ? 'Needs review' : 'Stable'}
+                          </Badge>
+                        </div>
+                        {revenueOsHealth.recentQualityRows.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">No scan has been recorded yet.</p>
+                        ) : revenueOsHealth.recentQualityRows.map((row, index) => (
+                          <div key={`${row.check_key || row.checkKey}-${row.scope}-${row.created_at || index}`} className="rounded-xl border p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="truncate text-sm font-bold">{row.check_key || row.checkKey || 'quality_check'}</p>
+                              <Badge variant={row.severity === 'critical' ? 'destructive' : row.status === 'passed' ? 'default' : 'outline'} className="capitalize">
+                                {row.status}
+                              </Badge>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">{row.message}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-3 rounded-2xl border bg-background/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-black">Experiments</p>
+                          <Badge variant="outline">{croExperimentRows.length.toLocaleString()} total</Badge>
+                        </div>
+                        {revenueOsHealth.recentExperiments.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">No CRO experiments recorded yet.</p>
+                        ) : revenueOsHealth.recentExperiments.map((experiment) => (
+                          <div key={experiment.id} className="rounded-xl border p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="truncate text-sm font-bold">{experiment.name || experiment.hypothesis || 'Experiment'}</p>
+                              <Badge variant="outline" className="capitalize">{experiment.status || 'draft'}</Badge>
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{experiment.hypothesis || 'No hypothesis recorded.'}</p>
+                          </div>
+                        ))}
+                        {revenueOsHealth.latestEvaluations.length > 0 && (
+                          <div className="space-y-2 border-t pt-3">
+                            <p className="text-xs font-bold uppercase text-muted-foreground">Latest evaluations</p>
+                            {revenueOsHealth.latestEvaluations.map((evaluation) => {
+                              const evidence = evaluation.evidence || {}
+                              const qualityScore = Math.round(Number(evidence.decision_quality_score || 0) * 100)
+                              const fdrRisk = Math.round(Number(evidence.false_discovery_risk || 0) * 100)
+                              const qValue = Math.round(Number(evidence.multiple_testing_q_value || 0) * 100)
+                              const readyChecks = [
+                                evidence.sample_size_ready ? 'sample ready' : 'sample waiting',
+                                evidence.purchase_sample_ready ? 'purchase ready' : 'purchase waiting',
+                                evidence.runtime_ready ? 'runtime ready' : 'runtime waiting',
+                                evidence.minimum_practical_effect_passed ? 'MPE passed' : 'MPE waiting',
+                                evidence.false_discovery_passed ? 'FDR passed' : 'FDR waiting',
+                              ]
+                              return (
+                                <div key={evaluation.id || evaluation.evaluation_key} className="rounded-xl border p-3">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <p className="truncate text-xs font-bold">{evaluation.experiment_key}</p>
+                                    <Badge variant={['rollback', 'pause'].includes(evaluation.decision) ? 'destructive' : evaluation.decision === 'promote' ? 'default' : 'outline'} className="capitalize">
+                                      {String(evaluation.decision || '').replace(/_/g, ' ')}
+                                    </Badge>
+                                  </div>
+                                  <p className="mt-1 text-xs text-muted-foreground">
+                                    {Math.round(Number(evaluation.confidence || 0) * 100)}% confidence • quality {qualityScore}% • FDR {fdrRisk}% / q {qValue}%
+                                  </p>
+                                  <p className="mt-1 text-xs text-muted-foreground">
+                                    Sample {Number(evidence.sample_size || 0).toLocaleString()} • purchases {Number(evidence.purchase_sample_size || 0).toLocaleString()} • runtime {Number(evidence.runtime_days || 0).toFixed(1)}d • MPE {formatAdminNaira(Number(evaluation.minimum_practical_effect || 0))}
+                                  </p>
+                                  <div className="mt-2 flex flex-wrap gap-1">
+                                    {readyChecks.map((check) => (
+                                      <Badge key={check} variant={check.includes('passed') || check.includes('ready') ? 'secondary' : 'outline'} className="text-[10px]">
+                                        {check}
+                                      </Badge>
+                                    ))}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="space-y-3 rounded-2xl border bg-background/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-black">Commercial Memory</p>
+                          <Badge variant="outline">{croRelationshipRows.length.toLocaleString()} graph edges</Badge>
+                        </div>
+                        <div className="rounded-xl border bg-muted/20 p-3">
+                          <div className="mb-3 flex items-center justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-black">Owner-defined relationship</p>
+                              <p className="text-xs text-muted-foreground">Use this for compatibility, replacement, required, or accessory-style edges Revenue OS should not guess.</p>
+                            </div>
+                            <Badge variant="secondary">EXPLICIT</Badge>
+                          </div>
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <Select
+                              value={explicitRelationshipDraft.fromProductId}
+                              onValueChange={(value) => setExplicitRelationshipDraft((draft) => ({ ...draft, fromProductId: value }))}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="From product" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {explicitRelationshipProductOptions.map((product) => (
+                                  <SelectItem key={product.id} value={product.id}>
+                                    {product.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Select
+                              value={explicitRelationshipDraft.toProductId}
+                              onValueChange={(value) => setExplicitRelationshipDraft((draft) => ({ ...draft, toProductId: value }))}
+                            >
+                              <SelectTrigger>
+                                <SelectValue placeholder="To product" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {explicitRelationshipProductOptions.map((product) => (
+                                  <SelectItem key={product.id} value={product.id}>
+                                    {product.name}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Select
+                              value={explicitRelationshipDraft.relationshipType}
+                              onValueChange={(value) => setExplicitRelationshipDraft((draft) => ({ ...draft, relationshipType: value as ExplicitProductRelationshipType }))}
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {EXPLICIT_PRODUCT_RELATIONSHIP_TYPES.map((type) => (
+                                  <SelectItem key={type} value={type}>
+                                    {type.replace(/_/g, ' ')}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <div className="flex gap-2">
+                              <Input
+                                type="number"
+                                min="0.05"
+                                max="1"
+                                step="0.05"
+                                value={explicitRelationshipDraft.strength}
+                                onChange={(event) => setExplicitRelationshipDraft((draft) => ({ ...draft, strength: event.target.value }))}
+                                placeholder="Strength 0.05-1"
+                              />
+                              <Button type="button" onClick={handleSaveExplicitProductRelationship} disabled={explicitRelationshipSaving}>
+                                {explicitRelationshipSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                                Save
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                        {revenueOsHealth.recentInsights.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">No proven insights recorded yet.</p>
+                        ) : revenueOsHealth.recentInsights.map((insight) => (
+                          <div key={insight.id} className="rounded-xl border p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="truncate text-sm font-bold">{insight.scope || 'Store insight'}</p>
+                              <Badge variant="outline" className="capitalize">{insight.status || 'active'}</Badge>
+                            </div>
+                            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{insight.finding || 'No finding recorded.'}</p>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-3 rounded-2xl border bg-background/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-black">Opportunity Queue</p>
+                          <Badge variant="outline">{revenueOsHealth.openOpportunities.toLocaleString()} open</Badge>
+                        </div>
+                        {revenueOsHealth.topOpportunities.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">No revenue opportunities recorded yet.</p>
+                        ) : revenueOsHealth.topOpportunities.map((opportunity) => (
+                          <div key={opportunity.id || opportunity.opportunity_key} className="rounded-xl border p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="truncate text-sm font-bold">{opportunity.type || 'Opportunity'}</p>
+                              <Badge variant="outline">{Number(opportunity.priority || 0).toFixed(1)}</Badge>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              {opportunity.scope} • {formatAdminNaira(Number(opportunity.expected_value || 0))} EV • {Math.round(Number(opportunity.confidence || 0) * 100)}% confidence
+                            </p>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="outline"
+                              className="mt-3 w-full"
+                              onClick={() => handleCreateExperimentFromOpportunity(opportunity)}
+                              disabled={experimentCreatingKey === (opportunity.opportunity_key || opportunity.id)}
+                            >
+                              {experimentCreatingKey === (opportunity.opportunity_key || opportunity.id) ? <Loader2 className="h-4 w-4 animate-spin" /> : <Target className="h-4 w-4" />}
+                              Draft experiment
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-3 rounded-2xl border bg-background/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-black">Action Plans</p>
+                          <Badge variant="outline">{revenueOsHealth.proposedActionPlans.toLocaleString()} active</Badge>
+                        </div>
+                        {revenueOsHealth.topActionPlans.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Refresh intelligence to convert opportunities into bounded action plans.</p>
+                        ) : revenueOsHealth.topActionPlans.map((plan) => {
+                          const status = String(plan.status || 'proposed').toLowerCase()
+                          const planKey = String(plan.id || plan.action_key || plan.actionKey)
+                          const updating = croActionPlanUpdatingKey === planKey
+                          return (
+                            <div key={plan.id || plan.action_key} className="rounded-xl border p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-sm font-bold">{String(plan.action_type || 'DO_NOTHING').replace(/_/g, ' ')}</p>
+                                <Badge variant={status === 'running' ? 'default' : status === 'paused' || status === 'rejected' ? 'destructive' : 'outline'} className="capitalize">
+                                  {plan.status || 'proposed'}
+                                </Badge>
+                              </div>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {plan.surface || 'products'} • {plan.scope || 'store'} • {formatAdminNaira(Number(plan.expected_value || 0))} EV
+                              </p>
+                              <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                                {plan.guardrails?.safe_to_auto_run ? 'Safe for bounded automation after checks.' : 'Requires admin approval before execution.'}
+                              </p>
+                              <div className="mt-3 grid grid-cols-2 gap-2">
+                                {status === 'proposed' && (
+                                  <>
+                                    <Button type="button" size="sm" variant="outline" onClick={() => handleUpdateCroActionPlanStatus(plan, 'approved')} disabled={updating}>
+                                      {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                                      Approve
+                                    </Button>
+                                    <Button type="button" size="sm" variant="outline" onClick={() => handleUpdateCroActionPlanStatus(plan, 'rejected')} disabled={updating}>
+                                      <X className="h-4 w-4" />
+                                      Reject
+                                    </Button>
+                                  </>
+                                )}
+                                {(status === 'approved' || status === 'paused') && (
+                                  <>
+                                    <Button type="button" size="sm" onClick={() => handleUpdateCroActionPlanStatus(plan, 'running')} disabled={updating || !croGlobalEnabled}>
+                                      {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                                      Run
+                                    </Button>
+                                    <Button type="button" size="sm" variant="outline" onClick={() => handleUpdateCroActionPlanStatus(plan, 'rejected')} disabled={updating}>
+                                      <X className="h-4 w-4" />
+                                      Reject
+                                    </Button>
+                                  </>
+                                )}
+                                {status === 'running' && (
+                                  <>
+                                    <Button type="button" size="sm" variant="outline" onClick={() => handleUpdateCroActionPlanStatus(plan, 'paused')} disabled={updating}>
+                                      {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Clock className="h-4 w-4" />}
+                                      Pause
+                                    </Button>
+                                    <Button type="button" size="sm" variant="outline" onClick={() => handleUpdateCroActionPlanStatus(plan, 'completed')} disabled={updating}>
+                                      <CheckCircle2 className="h-4 w-4" />
+                                      Complete
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+
+                      <div className="space-y-3 rounded-2xl border bg-background/60 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="font-black">Lifecycle Queue</p>
+                            <p className="text-xs text-muted-foreground">Repeat-purchase and reactivation actions. Outbound rows require consent and review.</p>
+                          </div>
+                          <Badge variant="outline">{Number(revenueOsHealth.lifecycleActions || 0).toLocaleString()} total</Badge>
+                        </div>
+                        {revenueOsHealth.topLifecycleActions.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">No lifecycle actions queued yet. Scheduled maintenance will populate this from real customer history.</p>
+                        ) : revenueOsHealth.topLifecycleActions.map((action) => {
+                          const status = String(action.status || 'needs_consent')
+                          const prefs = communicationPreferenceByUserId.get(String(action.user_id))
+                          const hasLifecycleEmailConsent = action.channel === 'email' && prefs?.email_lifecycle_opt_in === true
+                          const updating = lifecycleActionUpdatingKey === String(action.id || action.action_key)
+                          return (
+                            <div key={action.id || action.action_key} className="rounded-xl border p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-sm font-bold">{String(action.recommended_action || 'NO_OFFER').replace(/_/g, ' ')}</p>
+                                <Badge variant={status === 'needs_consent' ? 'secondary' : status === 'approved' ? 'default' : 'outline'} className="capitalize">
+                                  {status.replace(/_/g, ' ')}
+                                </Badge>
+                              </div>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                {action.lifecycle_stage || 'stage'} • {action.channel || 'email'} • {formatAdminNaira(Number(action.expected_value || 0))} EV
+                              </p>
+                              <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{action.reason || 'Permissioned lifecycle action.'}</p>
+                              <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-muted/40 p-2 text-xs">
+                                <span className="truncate">{userEmailById.get(String(action.user_id)) || `Customer ${String(action.user_id || '').slice(0, 8)}`}</span>
+                                <Badge variant={hasLifecycleEmailConsent ? 'outline' : 'secondary'}>
+                                  {hasLifecycleEmailConsent ? 'consented' : 'no consent'}
+                                </Badge>
+                              </div>
+                              <div className="mt-2 flex flex-wrap gap-1 text-xs">
+                                <Badge variant="outline">14d frequency cap</Badge>
+                                <Badge variant={Number(action.pressure_score || action.evidence?.lifecycle_pressure_score || 0) > 0 ? 'secondary' : 'outline'}>
+                                  pressure {Number(action.pressure_score || action.evidence?.lifecycle_pressure_score || 0)}
+                                </Badge>
+                              </div>
+                              <div className="mt-3 grid grid-cols-2 gap-2">
+                                {status === 'needs_consent' && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleLifecycleActionStatus(action, 'dismissed')}
+                                    disabled={updating}
+                                  >
+                                    <X className="h-4 w-4" />
+                                    Dismiss
+                                  </Button>
+                                )}
+                                {hasLifecycleEmailConsent && ['needs_consent', 'queued'].includes(status) && (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleLifecycleActionStatus(action, 'approved')}
+                                    disabled={updating}
+                                  >
+                                    {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+                                    Approve
+                                  </Button>
+                                )}
+                                {status === 'approved' && (
+                                  <>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      onClick={() => handleSendLifecycleAction(action)}
+                                      disabled={updating || !hasLifecycleEmailConsent}
+                                    >
+                                      {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                                      Send
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      onClick={() => handleLifecycleActionStatus(action, 'dismissed')}
+                                      disabled={updating}
+                                    >
+                                      <X className="h-4 w-4" />
+                                      Dismiss
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          )
+                        })}
+                        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                          <div className="rounded-xl border p-2">
+                            <p className="font-black">{Number(revenueOsHealth.lifecycleActionCounts?.needs_consent || 0).toLocaleString()}</p>
+                            <p className="text-muted-foreground">needs consent</p>
+                          </div>
+                          <div className="rounded-xl border p-2">
+                            <p className="font-black">{Number(revenueOsHealth.lifecycleActionCounts?.approved || 0).toLocaleString()}</p>
+                            <p className="text-muted-foreground">approved</p>
+                          </div>
+                          <div className="rounded-xl border p-2">
+                            <p className="font-black">{Number(revenueOsHealth.lifecycleActionCounts?.sent || 0).toLocaleString()}</p>
+                            <p className="text-muted-foreground">sent</p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-2xl border bg-background/60 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-black">Decision Arbitration</p>
+                          <p className="text-xs text-muted-foreground">Latest next-best-action decisions with pressure and guardrail context.</p>
+                        </div>
+                        <Badge variant="outline">{croDecisionRows.length.toLocaleString()} audits</Badge>
+                      </div>
+                      {revenueOsHealth.recentDecisions.length === 0 ? (
+                        <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">No CRO decisions audited yet.</p>
+                      ) : (
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          {revenueOsHealth.recentDecisions.map((decision) => {
+                            const metadata = decision.metadata || {}
+                            const action = String(decision.selected_action || metadata.nextBestAction || 'DO_NOTHING')
+                            const pressureScore = Number(metadata.pressureScore || 0)
+                            return (
+                              <div key={decision.id || decision.decision_id} className="rounded-xl border p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-sm font-black">{action.replace(/_/g, ' ')}</p>
+                                  <Badge variant={action === 'DO_NOTHING' ? 'secondary' : action === 'SUPPORT_HANDOFF' ? 'destructive' : 'outline'}>
+                                    {Math.round(Number(decision.confidence || metadata.actionConfidence || 0) * 100)}%
+                                  </Badge>
+                                </div>
+                                <p className="mt-1 text-xs text-muted-foreground">
+                                  {decision.surface || 'surface'} • pressure {pressureScore.toFixed(1)}
+                                </p>
+                                <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">
+                                  {metadata.actionReason || 'highest_scored_action'}
+                                </p>
+                                {Number(decision.__groupCount || 1) > 1 && (
+                                  <p className="mt-2 text-xs font-semibold text-muted-foreground">
+                                    {Number(decision.__groupCount).toLocaleString()} similar recent audits grouped
+                                  </p>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 rounded-2xl border bg-background/60 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-black">Promotion Guardrails</p>
+                          <p className="text-xs text-muted-foreground">Bounded promotion checks for discount percent, budget, expiry, scope, and sellable products.</p>
+                        </div>
+                        <Badge variant={revenueOsHealth.promotionFailures.length > 0 ? 'destructive' : 'outline'}>
+                          {revenueOsHealth.promotionFailures.length > 0 ? 'Review needed' : 'Clear'}
+                        </Badge>
+                      </div>
+                      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        {revenueOsHealth.promotionFindings.slice(0, 8).map((finding, index) => (
+                          <div key={`${finding.checkKey}:${finding.code || index}`} className="rounded-xl border p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="truncate text-sm font-black">{finding.code || finding.checkKey.replace(/_/g, ' ')}</p>
+                              <Badge variant={finding.status === 'failed' ? finding.severity === 'critical' ? 'destructive' : 'secondary' : 'outline'} className="capitalize">
+                                {finding.status}
+                              </Badge>
+                            </div>
+                            <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{finding.message}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="mt-4 rounded-2xl border bg-background/60 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-black">Product Commercial Intelligence</p>
+                          <p className="text-xs text-muted-foreground">Revenue, conversion efficiency, price position, stock coverage, and reversal risk from real customer activity.</p>
+                        </div>
+                        <Badge variant="outline">{revenueOsHealth.productIntelligenceRows.length.toLocaleString()} product(s)</Badge>
+                      </div>
+                      {revenueOsHealth.productIntelligenceRows.length === 0 ? (
+                        <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Refresh intelligence after product views and purchases to see commercial product health.</p>
+                      ) : (
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          {revenueOsHealth.productIntelligenceRows.map((row) => {
+                            const features = row.features || {}
+                            const revenue = Number(features.revenue || features.revenue_30d || 0)
+                            const views = Number(features.impressions || features.views_30d || 0)
+                            const clicks = Number(features.clicks || features.clicks_30d || 0)
+                            const daysOfInventory = Number(features.days_of_inventory)
+                            return (
+                              <div key={row.snapshot_key || row.scope_id} className="rounded-xl border p-3">
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="line-clamp-2 text-sm font-black">{features.name || row.scope_id}</p>
+                                  <Badge variant={Number(features.reversal_rate || 0) > 0.08 ? 'destructive' : 'outline'}>
+                                    {Math.round(Number(features.reversal_rate || 0) * 100)}% rev
+                                  </Badge>
+                                </div>
+                                <p className="mt-2 text-lg font-black">{formatAdminNaira(revenue)}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {views.toLocaleString()} views • {clicks.toLocaleString()} clicks • CVR {Math.round(Number(features.order_rate_per_impression || features.conversion_proxy || 0) * 1000) / 10}%
+                                </p>
+                                <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                                  <div className="rounded-lg bg-muted/40 p-2">
+                                    <p className="text-muted-foreground">RPI</p>
+                                    <p className="font-black">{formatAdminNaira(Number(features.revenue_per_impression || features.revenue_per_view || 0))}</p>
+                                  </div>
+                                  <div className="rounded-lg bg-muted/40 p-2">
+                                    <p className="text-muted-foreground">Price pct.</p>
+                                    <p className="font-black">{features.category_price_percentile == null ? '-' : `${Math.round(Number(features.category_price_percentile) * 100)}%`}</p>
+                                  </div>
+                                  <div className="rounded-lg bg-muted/40 p-2">
+                                    <p className="text-muted-foreground">Stock days</p>
+                                    <p className="font-black">{Number.isFinite(daysOfInventory) ? Math.round(daysOfInventory).toLocaleString() : '-'}</p>
+                                  </div>
+                                  <div className="rounded-lg bg-muted/40 p-2">
+                                    <p className="text-muted-foreground">Units</p>
+                                    <p className="font-black">{Number(features.units_sold || features.units_30d || 0).toLocaleString()}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 rounded-2xl border bg-background/60 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-black">Device Funnel Diagnostics</p>
+                          <p className="text-xs text-muted-foreground">Conversion and payment health split by device, so mobile and desktop issues do not hide inside one average.</p>
+                        </div>
+                        <Badge variant="outline">{revenueOsHealth.deviceRows.length.toLocaleString()} device(s)</Badge>
+                      </div>
+                      {revenueOsHealth.deviceRows.length === 0 ? (
+                        <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Refresh intelligence after customer events to see device funnel health.</p>
+                      ) : (
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                          {revenueOsHealth.deviceRows.map((row) => (
+                            <div key={row.snapshot_key || row.scope_id} className="rounded-xl border p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-sm font-black capitalize">{row.features?.device || 'unknown'}</p>
+                                <Badge variant="outline">{Number(row.features?.visitors || 0).toLocaleString()} visitors</Badge>
+                              </div>
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                CVR {Math.round(Number(row.features?.conversion_rate || 0) * 1000) / 10}% • RPV {formatAdminNaira(Number(row.features?.revenue_per_visitor || 0))}
+                              </p>
+                              <p className="mt-1 text-xs text-muted-foreground">
+                                Pay fail {Math.round(Number(row.features?.payment_failure_rate || 0) * 1000) / 10}% • abandon {Math.round(Number(row.features?.checkout_abandonment_rate || 0) * 1000) / 10}%
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 rounded-2xl border bg-background/60 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-black">Attribution & Traffic Quality</p>
+                          <p className="text-xs text-muted-foreground">Normalized source/channel performance from trusted first-party events.</p>
+                        </div>
+                        <Badge variant="outline">
+                          {Number(salesAnalytics.visitors.trafficQualityCounts?.bot || 0).toLocaleString()} bot visits filtered
+                        </Badge>
+                      </div>
+                      {revenueOsHealth.attributionRows.length === 0 ? (
+                        <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Refresh intelligence after new visits to see attribution performance.</p>
+                      ) : (
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                          {revenueOsHealth.attributionRows.map((row) => (
+                            <div key={row.snapshot_key || row.scope_id} className="rounded-xl border p-3">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="truncate text-sm font-black">{row.features?.channel || 'unknown'} / {row.features?.source || 'unknown'}</p>
+                                <Badge variant="outline">{Number(row.features?.visitors || 0).toLocaleString()} visitors</Badge>
+                              </div>
+                              <p className="mt-2 text-xs text-muted-foreground">
+                                CVR {Math.round(Number(row.features?.conversion_rate || 0) * 1000) / 10}% • RPV {formatAdminNaira(Number(row.features?.revenue_per_visitor || 0))}
+                              </p>
+                              {row.features?.campaign && <p className="mt-1 truncate text-xs text-muted-foreground">Campaign: {row.features.campaign}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 rounded-2xl border bg-background/60 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-black">Acquisition Source Economics</p>
+                          <p className="text-xs text-muted-foreground">First-party source value ranked by revenue per visitor. Spend is not assumed unless you add it later.</p>
+                        </div>
+                        <Badge variant="outline">{revenueOsHealth.sourceEconomicsRows.length.toLocaleString()} source(s)</Badge>
+                      </div>
+                      {revenueOsHealth.sourceEconomicsRows.length === 0 ? (
+                        <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Refresh intelligence after attributed traffic to see source economics.</p>
+                      ) : (
+                        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+                          {revenueOsHealth.sourceEconomicsRows.map((row) => (
+                            <div key={row.snapshot_key || row.scope_id} className="rounded-xl border p-3">
+                              <p className="truncate text-sm font-black">{row.features?.source || 'unknown'}</p>
+                              <p className="mt-1 truncate text-xs text-muted-foreground">{row.features?.channel || 'unknown'}{row.features?.campaign ? ` • ${row.features.campaign}` : ''}</p>
+                              <p className="mt-3 text-lg font-black">{formatAdminNaira(Number(row.features?.revenue_per_visitor || 0))}</p>
+                              <p className="text-xs text-muted-foreground">
+                                {Number(row.features?.visitors || 0).toLocaleString()} visitors • CVR {Math.round(Number(row.features?.conversion_rate || 0) * 1000) / 10}%
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-4 rounded-2xl border bg-background/60 p-4">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="font-black">Contextual Bandit Allocations</p>
+                          <p className="text-xs text-muted-foreground">Safe traffic-weight recommendations for running experiment variants. Bandits allocate among approved variants only.</p>
+                        </div>
+                        <Badge variant="outline">{revenueOsHealth.banditRows.length.toLocaleString()} snapshot(s)</Badge>
+                      </div>
+                      {revenueOsHealth.banditRows.length === 0 ? (
+                        <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Run evaluation after an experiment has traffic to generate allocation advice.</p>
+                      ) : (
+                        <div className="grid gap-3 lg:grid-cols-2">
+                          {revenueOsHealth.banditRows.map((row) => {
+                            const allocation = Array.isArray(row.features?.allocation) ? row.features.allocation : []
+                            const recommendation = String(row.features?.recommendation || 'insufficient_data')
+                            return (
+                              <div key={row.snapshot_key || row.id} className="rounded-xl border p-3">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="truncate text-sm font-black">{row.features?.experiment_key || row.scope_id || 'experiment'}</p>
+                                  <Badge variant={recommendation === 'pause' ? 'destructive' : recommendation === 'allocate' ? 'default' : 'outline'} className="capitalize">
+                                    {recommendation.replace(/_/g, ' ')}
+                                  </Badge>
+                                </div>
+                                <div className="mt-3 space-y-2">
+                                  {allocation.length === 0 ? (
+                                    <p className="text-xs text-muted-foreground">No variant allocation data yet.</p>
+                                  ) : allocation.map((variant: any) => (
+                                    <div key={variant.variantId} className="rounded-lg bg-muted/40 p-2">
+                                      <div className="flex items-center justify-between gap-2 text-xs">
+                                        <span className="truncate font-bold">{variant.variantId}</span>
+                                        <span className="font-black">{Math.round(Number(variant.weight || 0) * 100)}%</span>
+                                      </div>
+                                      <div className="mt-1 h-2 overflow-hidden rounded-full bg-background">
+                                        <div className="h-full rounded-full bg-primary" style={{ width: `${Math.round(Number(variant.weight || 0) * 100)}%` }} />
+                                      </div>
+                                      <p className="mt-1 text-xs text-muted-foreground">
+                                        reward {formatAdminNaira(Number(variant.reward || 0))}/visitor • {Number(variant.visitors || 0).toLocaleString()} visitors • {Math.round(Number(variant.confidence || 0) * 100)}% confidence
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  </AdminControlSection>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <AdminControlSection title="High Selling Products" description="Products ranked by completed revenue and units sold.">
+                      <div className="space-y-3">
+                        {salesAnalytics.highSellingProducts.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">No completed product sales yet.</p>
+                        ) : salesAnalytics.highSellingProducts.map((product, index) => (
+                          <div key={product.id} className="flex items-center justify-between gap-3 rounded-xl border p-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-black">{index + 1}. {product.name}</p>
+                              <p className="text-xs text-muted-foreground">{product.category} • {product.units} units • stock {product.stock}</p>
+                            </div>
+                            <Badge variant="outline" className="whitespace-nowrap">{formatAdminNaira(product.revenue)}</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </AdminControlSection>
+
+                    <AdminControlSection title="Best Customers" description="Customers ranked by completed purchases.">
+                      <div className="space-y-3">
+                        {salesAnalytics.bestCustomers.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">No completed customer sales yet.</p>
+                        ) : salesAnalytics.bestCustomers.map((customer, index) => (
+                          <div key={customer.id} className="flex items-center justify-between gap-3 rounded-xl border p-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-black">{index + 1}. {customer.email}</p>
+                              <p className="text-xs text-muted-foreground">{customer.orders} orders • {customer.units} units • last {formatDistanceToNow(new Date(customer.lastOrder), { addSuffix: true })}</p>
+                            </div>
+                            <Badge variant="outline" className="whitespace-nowrap">{formatAdminNaira(customer.revenue)}</Badge>
+                          </div>
+                        ))}
+                      </div>
+                    </AdminControlSection>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <AdminControlSection
+                      title="Dormant Customers"
+                      description="Customers with email addresses who have had no purchase, deposit, login, visit, or tracked activity for 3+ days."
+                    >
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                          <div className="rounded-xl border p-3">
+                            <p className="text-xl font-black">{customerRetentionAnalytics.dormantCustomers.length.toLocaleString()}</p>
+                            <p className="text-muted-foreground">inactive</p>
+                          </div>
+                          <div className="rounded-xl border p-3">
+                            <p className="text-xl font-black">{customerRetentionAnalytics.dormantEmailCount.toLocaleString()}</p>
+                            <p className="text-muted-foreground">emails</p>
+                          </div>
+                          <div className="rounded-xl border p-3">
+                            <p className="text-xl font-black">3+</p>
+                            <p className="text-muted-foreground">days</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
+                            type="button"
+                            onClick={downloadDormantCustomerEmails}
+                            disabled={customerRetentionAnalytics.dormantCustomers.length === 0}
+                            className="min-w-0"
+                          >
+                            <Download className="h-4 w-4" />
+                            <span className="truncate">Download CSV</span>
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={handleMarkAllDormantEmailed}
+                            disabled={customerRetentionAnalytics.dormantCustomers.length === 0}
+                            className="min-w-0"
+                          >
+                            <Mail className="h-4 w-4" />
+                            <span className="truncate">All emailed</span>
+                          </Button>
+                        </div>
+
+                        <div className="space-y-3">
+                          {customerRetentionAnalytics.dormantCustomers.length === 0 ? (
+                            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                              No dormant customers right now.
+                            </p>
+                          ) : customerRetentionAnalytics.dormantCustomers.slice(0, 8).map((customer, index) => (
+                            <div key={customer.id} className="flex items-center justify-between gap-3 rounded-xl border p-3">
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate font-black">{index + 1}. {customer.email}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  {customer.orders} orders • {customer.totalUnits} units • spent {formatAdminNaira(customer.totalSpent)}
+                                </p>
+                                <p className="truncate text-xs text-muted-foreground">
+                                  last activity {customer.lastActivityAt ? formatDistanceToNow(new Date(customer.lastActivityAt), { addSuffix: true }) : 'unknown'}
+                                </p>
+                              </div>
+                              <Badge variant="outline" className="shrink-0 whitespace-nowrap">{customer.daysInactive}d</Badge>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </AdminControlSection>
+
+                    <AdminControlSection
+                      title="All Emailed"
+                      description="Customers already exported or marked emailed, ranked by completed spend after that email mark."
+                    >
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-3 gap-2 text-center text-xs">
+                          <div className="rounded-xl border p-3">
+                            <p className="text-xl font-black">{customerRetentionAnalytics.emailedCustomers.length.toLocaleString()}</p>
+                            <p className="text-muted-foreground">emailed</p>
+                          </div>
+                          <div className="rounded-xl border p-3">
+                            <p className="text-xl font-black">{customerRetentionAnalytics.returnedCustomers.length.toLocaleString()}</p>
+                            <p className="text-muted-foreground">returned</p>
+                          </div>
+                          <div className="rounded-xl border p-3">
+                            <p className="truncate text-lg font-black">{formatAdminNaira(customerRetentionAnalytics.returnedRevenue)}</p>
+                            <p className="text-muted-foreground">spent</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={downloadEmailedCustomerCsv}
+                            disabled={customerRetentionAnalytics.emailedCustomers.length === 0}
+                            className="min-w-0"
+                          >
+                            <Download className="h-4 w-4" />
+                            <span className="truncate">Download CSV</span>
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            onClick={clearEmailedDormantCustomers}
+                            disabled={customerRetentionAnalytics.emailedCustomers.length === 0}
+                            className="min-w-0"
+                          >
+                            <X className="h-4 w-4" />
+                            <span className="truncate">Clear</span>
+                          </Button>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0 text-xs text-muted-foreground">
+                            <p className="truncate">Deposited after email: {formatAdminNaira(customerRetentionAnalytics.returnedDeposits)}</p>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3">
+                          {customerRetentionAnalytics.emailedCustomers.length === 0 ? (
+                            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                              Nobody has been marked emailed yet.
+                            </p>
+                          ) : customerRetentionAnalytics.emailedCustomers.slice(0, 8).map((customer, index) => (
+                            <div key={customer.userId} className="rounded-xl border p-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate font-black">{index + 1}. {customer.email}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    emailed {formatDistanceToNow(new Date(customer.markedAt), { addSuffix: true })}
+                                  </p>
+                                  <p className="truncate text-xs text-muted-foreground">
+                                    {customer.returnedAt
+                                      ? `returned ${formatDistanceToNow(new Date(customer.returnedAt), { addSuffix: true })}`
+                                      : 'not returned yet'}
+                                  </p>
+                                </div>
+                                <Badge variant="outline" className="shrink-0 whitespace-nowrap">{formatAdminNaira(customer.spentAfterEmail)}</Badge>
+                              </div>
+                              <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                                <Badge variant={customer.returned ? 'default' : 'secondary'}>{customer.returned ? 'returned' : 'waiting'}</Badge>
+                                <Badge variant={customer.purchasesAfterEmail > 0 ? 'outline' : 'secondary'}>
+                                  {customer.purchasesAfterEmail} purchase{customer.purchasesAfterEmail === 1 ? '' : 's'}
+                                </Badge>
+                                <Badge variant={customer.depositsAfterEmail > 0 ? 'outline' : 'secondary'}>
+                                  {customer.depositsAfterEmail} deposit{customer.depositsAfterEmail === 1 ? '' : 's'}
+                                </Badge>
+                                <Badge variant="outline">{customer.visitsAfterEmail + customer.eventsAfterEmail} activity</Badge>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </AdminControlSection>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <UserPlus className="h-5 w-5 text-primary" />
+                          New Customers
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-xl border p-3"><p className="text-2xl font-black">{salesAnalytics.newCustomers.today}</p><p className="text-xs text-muted-foreground">Today</p></div>
+                        <div className="rounded-xl border p-3"><p className="text-2xl font-black">{salesAnalytics.newCustomers.week}</p><p className="text-xs text-muted-foreground">7 days</p></div>
+                        <div className="rounded-xl border p-3"><p className="text-2xl font-black">{salesAnalytics.newCustomers.month}</p><p className="text-xs text-muted-foreground">30 days</p></div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          <MousePointerClick className="h-5 w-5 text-primary" />
+                          Visitor Trend
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="grid grid-cols-3 gap-2 text-center">
+                        <div className="rounded-xl border p-3"><p className="text-2xl font-black">{salesAnalytics.visitors.today}</p><p className="text-xs text-muted-foreground">{salesAnalytics.visitors.visitsToday} visits</p></div>
+                        <div className="rounded-xl border p-3"><p className="text-2xl font-black">{salesAnalytics.visitors.week}</p><p className="text-xs text-muted-foreground">{salesAnalytics.visitors.visitsWeek} visits</p></div>
+                        <div className="rounded-xl border p-3"><p className="text-2xl font-black">{salesAnalytics.visitors.month}</p><p className="text-xs text-muted-foreground">{salesAnalytics.visitors.visitsMonth} visits</p></div>
+                      </CardContent>
+                    </Card>
+
+                    <Card>
+                      <CardHeader>
+                        <CardTitle>Market Trends</CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-2">
+                        {salesAnalytics.marketTrends.length === 0 ? (
+                          <p className="rounded-xl border border-dashed p-4 text-center text-sm text-muted-foreground">No weekly trend yet.</p>
+                        ) : salesAnalytics.marketTrends.slice(0, 4).map((trend) => (
+                          <div key={trend.category} className="flex items-center justify-between rounded-xl border p-3">
+                            <div className="min-w-0">
+                              <p className="truncate font-bold">{trend.category}</p>
+                              <p className="text-xs text-muted-foreground">{trend.recentUnits} units this week</p>
+                            </div>
+                            <Badge variant={trend.growth >= 0 ? 'default' : 'destructive'}>{trend.growth >= 0 ? '+' : ''}{trend.growth.toFixed(0)}%</Badge>
+                          </div>
+                        ))}
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  <AdminControlSection
+                    title="Section Histories"
+                    description="Customer activity grouped by website section. Each panel collapses on mobile to save space."
+                  >
+                    <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                      <div className="relative w-full md:max-w-md">
+                        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                        <Input
+                          value={historySearchQuery}
+                          onChange={(event) => setHistorySearchQuery(event.target.value)}
+                          placeholder="Search customer, product, reference..."
+                          className="pl-10"
+                        />
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button type="button" variant="outline" onClick={loadAdminHistories} disabled={historyLoading}>
+                          {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          Refresh histories
+                        </Button>
+                        <Button type="button" variant="outline" onClick={exportHistoryRows} disabled={salesFilteredHistoryRows.length === 0}>
+                          <Download className="h-4 w-4" />
+                          Export CSV
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      {visibleHistorySections.map((section) => (
+                        <AdminControlSection
+                          key={section.key}
+                          title={`${section.title} (${section.rows.length.toLocaleString()})`}
+                          description={section.description}
+                        >
+                          {section.rows.length === 0 ? (
+                            <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">
+                              No matching customer records in this section.
+                            </p>
+                          ) : (
+                            <div className="overflow-x-auto rounded-xl border">
+                              <Table>
+                                <TableHeader>
+                                  <TableRow>
+                                    <TableHead>Date</TableHead>
+                                    <TableHead>Customer</TableHead>
+                                    <TableHead>Item</TableHead>
+                                    <TableHead>Details</TableHead>
+                                    <TableHead>Reference</TableHead>
+                                    <TableHead>Status</TableHead>
+                                    <TableHead className="text-right">Amount</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {section.rows.slice(0, 20).map((row) => (
+                                    <TableRow key={row.id}>
+                                      <TableCell className="whitespace-nowrap text-sm">
+                                        {row.date ? format(new Date(row.date), 'MMM d, yyyy HH:mm') : 'Unknown'}
+                                      </TableCell>
+                                      <TableCell className="min-w-[220px]">
+                                        <p className="font-semibold">{row.user_email || row.user_name || `Customer ${String(row.user_id || '').slice(0, 8)}`}</p>
+                                        <p className="font-mono text-xs text-muted-foreground">{row.user_id || '-'}</p>
+                                      </TableCell>
+                                      <TableCell className="min-w-[260px]">
+                                        <p className="font-semibold">{row.title}</p>
+                                        {row.subtitle && <p className="max-w-[360px] truncate text-xs text-muted-foreground" title={row.subtitle}>{row.subtitle}</p>}
+                                      </TableCell>
+                                      <TableCell className="max-w-[260px] truncate text-xs text-muted-foreground" title={row.detail || undefined}>
+                                        {row.detail || '-'}
+                                      </TableCell>
+                                      <TableCell className="font-mono text-xs">{row.reference || '-'}</TableCell>
+                                      <TableCell>
+                                        <Badge variant={isPositiveStatus(row.status) ? 'default' : 'outline'} className={cn('capitalize', isPositiveStatus(row.status) && 'bg-emerald-600 hover:bg-emerald-600')}>
+                                          {normalizeStatus(row.status)}
+                                        </Badge>
+                                      </TableCell>
+                                      <TableCell className="whitespace-nowrap text-right font-black">
+                                        {row.amount == null ? '-' : formatAdminNaira(row.amount)}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            </div>
+                          )}
+                        </AdminControlSection>
+                      ))}
+                    </div>
+                  </AdminControlSection>
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Transaction History */}
+            <TabsContent value="histories" className="space-y-6">
+              <Card className="overflow-hidden">
+                <CardHeader className="border-b bg-gradient-to-r from-purple-50 via-white to-cyan-50 dark:from-purple-950/30 dark:via-card dark:to-cyan-950/20">
+                  <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2 text-2xl">
+                        <History className="h-6 w-6 text-primary" />
+                        Transaction History
+                      </CardTitle>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Completed customer wallet deposit transactions only. Product, SMS, crypto, bills, gift card, and social histories live under Sales.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button type="button" variant="outline" onClick={loadAdminHistories} disabled={historyLoading}>
+                        {historyLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                        Refresh
+                      </Button>
+                      <Button type="button" variant="outline" onClick={exportHistoryRows} disabled={filteredHistoryRows.length === 0}>
+                        <Download className="h-4 w-4" />
+                        Export CSV
+                      </Button>
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-5 p-4 md:p-6">
+                  <div className="grid gap-3 md:grid-cols-3">
+                    <Card className="bg-emerald-50/80 dark:bg-emerald-500/10">
+                      <CardContent className="p-4">
+                        <p className="text-sm font-semibold text-muted-foreground">Completed Transactions</p>
+                        <p className="mt-2 text-2xl font-black text-emerald-700 dark:text-emerald-300">
+                          {formatAdminNaira(historyStats.completedTotal)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">{historyStats.completedCount} record(s)</p>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-cyan-50/80 dark:bg-cyan-500/10">
+                      <CardContent className="p-4">
+                        <p className="text-sm font-semibold text-muted-foreground">Customers Funded</p>
+                        <p className="mt-2 text-2xl font-black text-cyan-700 dark:text-cyan-300">
+                          {new Set(depositHistoryRows.map((row) => row.user_id).filter(Boolean)).size.toLocaleString()}
+                        </p>
+                        <p className="text-xs text-muted-foreground">Actual non-staff customers</p>
+                      </CardContent>
+                    </Card>
+                    <Card className="bg-purple-50/80 dark:bg-purple-500/10">
+                      <CardContent className="p-4">
+                        <p className="text-sm font-semibold text-muted-foreground">Latest Transaction</p>
+                        <p className="mt-2 truncate text-xl font-black text-purple-700 dark:text-purple-300">
+                          {depositHistoryRows[0] ? formatAdminNaira(depositHistoryRows[0].amount) : 'No transactions'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {depositHistoryRows[0]?.date ? formatDistanceToNow(new Date(depositHistoryRows[0].date), { addSuffix: true }) : 'Waiting for completed transactions'}
+                        </p>
+                      </CardContent>
+                    </Card>
+                  </div>
+
+                  {Object.keys(historyErrors).length > 0 && (
+                    <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100">
+                      <p className="font-bold">Some history sources need attention.</p>
+                      <div className="mt-2 grid gap-1 md:grid-cols-2">
+                        {Object.entries(historyErrors).map(([label, message]) => (
+                          <p key={label} className="break-words">
+                            <span className="font-semibold">{label}:</span> {message}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={historySearchQuery}
+                      onChange={(event) => setHistorySearchQuery(event.target.value)}
+                      placeholder="Search customer, transaction reference, status..."
+                      className="pl-10"
+                    />
+                  </div>
+
+                  {historyLoading ? (
+                    <div className="rounded-2xl border py-16 text-center">
+                      <Loader2 className="mx-auto mb-3 h-8 w-8 animate-spin text-primary" />
+                      <p className="font-semibold">Loading completed transactions...</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded-2xl border">
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Date</TableHead>
+                              <TableHead>Customer</TableHead>
+                              <TableHead>Reference</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Balance After</TableHead>
+                              <TableHead className="text-right">Amount</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {filteredHistoryRows.length === 0 ? (
+                              <TableRow>
+                                <TableCell colSpan={6} className="py-10 text-center text-muted-foreground">
+                                  No completed customer transactions match this view.
+                                </TableCell>
+                              </TableRow>
+                            ) : filteredHistoryRows.map((row) => (
+                              <TableRow key={row.id}>
+                                <TableCell className="whitespace-nowrap text-sm">
+                                  {row.date ? format(new Date(row.date), 'MMM d, yyyy HH:mm') : 'Unknown'}
+                                  {row.date && (
+                                    <p className="text-xs text-muted-foreground">
+                                      {formatDistanceToNow(new Date(row.date), { addSuffix: true })}
+                                    </p>
+                                  )}
+                                </TableCell>
+                                <TableCell className="min-w-[220px]">
+                                  <p className="font-semibold">{row.user_email || row.user_name || `Customer ${String(row.user_id || '').slice(0, 8)}`}</p>
+                                  <p className="font-mono text-xs text-muted-foreground">{row.user_id || '-'}</p>
+                                </TableCell>
+                                <TableCell className="font-mono text-xs">{row.reference || '-'}</TableCell>
+                                <TableCell>
+                                  <Badge className="bg-emerald-600 capitalize hover:bg-emerald-600">
+                                    {normalizeStatus(row.status)}
+                                  </Badge>
+                                </TableCell>
+                                <TableCell className="text-sm text-muted-foreground">{row.detail || '-'}</TableCell>
+                                <TableCell className="whitespace-nowrap text-right font-black">
+                                  {row.amount == null ? '-' : formatAdminNaira(row.amount)}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* Email / Broadcast */}
+            <TabsContent value="email" className="space-y-6">
+              {/* Compose Card */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <Mail className="h-5 w-5" />
+                    Compose Email
+                  </CardTitle>
+                  <p className="text-muted-foreground">Send targeted emails or broadcast only to customers who opted into promotional email</p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {/* Subject */}
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Subject</label>
+                    <Input value={emailSubject} onChange={e => setEmailSubject(e.target.value)} placeholder="Email subject line" />
+                  </div>
+
+                  {/* Message */}
+                  <div>
+                    <label className="text-sm font-medium mb-1 block">Message</label>
+                    <Textarea
+                      value={emailMessage}
+                      onChange={e => setEmailMessage(e.target.value)}
+                      placeholder="Write your email message here... (plain text — will be wrapped in TallyStore branded template)"
+                      rows={8}
+                    />
+                  </div>
+
+                  {/* Recipients for targeted send */}
+                  <div className="border rounded-lg p-4 space-y-3">
+                    <label className="text-sm font-medium block">Targeted Recipients (optional)</label>
+                    <div className="flex gap-2">
+                      <Input
+                        value={emailRecipientInput}
+                        onChange={e => setEmailRecipientInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEmailRecipient() } }}
+                        placeholder="user@example.com"
+                        className="flex-1"
+                      />
+                      <Button variant="outline" size="sm" onClick={addEmailRecipient}><Plus className="h-4 w-4" /></Button>
+                    </div>
+                    {emailRecipients.length > 0 && (
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap gap-2">
+                          {emailRecipients.map((email, idx) => (
+                            <Badge key={idx} variant="secondary" className="flex items-center gap-1 px-2 py-1">
+                              {email}
+                              <button onClick={() => setEmailRecipients(prev => prev.filter((_, i) => i !== idx))}>
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          ))}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs text-muted-foreground">{emailRecipients.length} recipient(s)</span>
+                          <Button variant="ghost" size="sm" onClick={() => setEmailRecipients([])}>Clear all</Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Action buttons */}
+                  <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                    <Button
+                      onClick={handleSendToList}
+                      disabled={isSendingEmail || emailRecipients.length === 0 || !emailMessage.trim()}
+                      variant="outline"
+                      className="flex-1"
+                    >
+                      {isSendingEmail ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+                      Send to List ({emailRecipients.length})
+                    </Button>
+
+                    <div className="flex items-center gap-2 flex-1">
+                      <Button
+                        onClick={handleBroadcast}
+                        disabled={isBroadcasting || !emailMessage.trim()}
+                        className="flex-1 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+                      >
+                        {isBroadcasting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Mail className="h-4 w-4 mr-2" />}
+                        {isDryRun ? 'Email dry run' : 'Email opted-in customers'}
+                      </Button>
+                      <label className="flex items-center gap-1.5 text-xs whitespace-nowrap cursor-pointer">
+                        <input type="checkbox" checked={isDryRun} onChange={e => { setIsDryRun(e.target.checked); setDryRunResult(null) }} className="rounded" />
+                        Test mode
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Dry run result */}
+                  {dryRunResult && (
+                    <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg border border-blue-200 dark:border-blue-800">
+                      <p className="font-medium text-blue-800 dark:text-blue-200 mb-1">Dry Run Result</p>
+                      <p className="text-sm text-blue-700 dark:text-blue-300">Opted-in recipients: <strong>{dryRunResult.totalRecipients?.toLocaleString()}</strong></p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Broadcast Jobs */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2"><Send className="h-5 w-5" /> Broadcast Jobs</CardTitle>
+                      <p className="text-muted-foreground text-sm mt-1">Track progress of mass email broadcasts</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={loadBroadcastJobs} disabled={isLoadingJobs}>
+                      <RefreshCw className={`h-4 w-4 mr-1 ${isLoadingJobs ? 'animate-spin' : ''}`} /> Refresh
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {broadcastJobs.length === 0 ? (
+                    <div className="text-center py-8 text-muted-foreground">
+                      <Mail className="h-12 w-12 mx-auto mb-3 opacity-40" />
+                      <p>No broadcast jobs yet</p>
+                      <p className="text-sm">Use the compose card above to send your first broadcast</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {broadcastJobs.map(job => {
+                        const processed = job.sent_count + job.failed_count
+                        const total = job.total_recipients || 1
+                        const pct = Math.round((processed / total) * 100)
+                        const isActive = job.status === 'queued' || job.status === 'processing'
+
+                        return (
+                          <div key={job.id} className="border rounded-lg p-4 space-y-3">
+                            <div className="flex items-start justify-between gap-2">
+                              <div className="min-w-0 flex-1">
+                                <p className="font-medium truncate">{job.subject}</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Created {job.created_at ? formatDistanceToNow(new Date(job.created_at), { addSuffix: true }) : 'unknown'}
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2 flex-shrink-0">
+                                {getJobStatusBadge(job.status)}
+                                {isActive && (
+                                  <Button variant="ghost" size="sm" onClick={() => handleCancelBroadcast(job.id)}>
+                                    <XCircle className="h-4 w-4 text-red-500" />
+                                  </Button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Progress bar */}
+                            <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                              <div
+                                className={`h-2 rounded-full transition-all duration-500 ${
+                                  job.status === 'completed' ? 'bg-green-500' :
+                                  job.status === 'cancelled' ? 'bg-gray-400' :
+                                  job.status === 'failed' ? 'bg-red-500' :
+                                  'bg-blue-500'
+                                }`}
+                                style={{ width: `${Math.min(pct, 100)}%` }}
+                              />
+                            </div>
+
+                            {/* Stats */}
+                            <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
+                              <span className="text-green-600 font-medium">{job.sent_count.toLocaleString()} sent</span>
+                              <span className="text-red-500">{job.failed_count.toLocaleString()} failed</span>
+                              <span>of {total.toLocaleString()} total</span>
+                              <span className="font-medium">{pct}%</span>
+                              {job.started_at && !job.completed_at && (
+                                <span>{formatDistanceToNow(new Date(job.started_at))} elapsed</span>
+                              )}
+                              {job.completed_at && (
+                                <span>Completed in {formatDistanceToNow(new Date(job.started_at!), { addSuffix: false })}</span>
+                              )}
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            <TabsContent value="api-partners" className="space-y-6">
+              <AdminControlSection
+                title="API Partners"
+                description="Private reseller access for trusted websites. Full keys are generated once and stored hashed."
+              >
+                {PARTNER_API_INCIDENT_PAUSED && (
+                  <div className="rounded-2xl border border-red-200 bg-red-50 p-4 text-red-950 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-100">
+                    <div className="flex items-start gap-3">
+                      <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+                      <div>
+                        <p className="text-sm font-black">Partner API paused</p>
+                        <p className="mt-1 text-xs opacity-80">
+                          Partner traffic remains paused. The owner can create reviewed partners, issue or revoke keys, and choose prepaid or unlimited credit with an audit reason. Existing partner activation and external paid orders remain locked.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {generatedApiCredentials && (
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-emerald-950 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-100">
+                    <div className="space-y-4">
+                      <div>
+                        <p className="text-sm font-black">New partner credentials</p>
+                        <p className="mt-1 text-xs opacity-80">Copy these now. The full API key and webhook secret will not be shown again.</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => navigator.clipboard?.writeText(`TallyStore API key: ${generatedApiCredentials.apiKey}\nTallyStore webhook secret: ${generatedApiCredentials.webhookSecret}`)}
+                        className="w-full"
+                      >
+                        Copy API key + webhook secret
+                      </Button>
+                      <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+                        <div className="min-w-0">
+                          <p className="text-xs font-black uppercase tracking-wide opacity-80">API key</p>
+                          <p className="mt-1 break-all font-mono text-xs">{generatedApiCredentials.apiKey}</p>
+                        </div>
+                        <Button type="button" variant="outline" onClick={() => navigator.clipboard?.writeText(generatedApiCredentials.apiKey)} className="shrink-0">
+                          Copy key
+                        </Button>
+                      </div>
+                      <div className="grid gap-3 lg:grid-cols-[1fr_auto] lg:items-center">
+                        <div className="min-w-0">
+                          <p className="text-xs font-black uppercase tracking-wide opacity-80">Webhook secret</p>
+                          <p className="mt-1 break-all font-mono text-xs">{generatedApiCredentials.webhookSecret}</p>
+                        </div>
+                        <Button type="button" variant="outline" onClick={() => navigator.clipboard?.writeText(generatedApiCredentials.webhookSecret)} className="shrink-0">
+                          Copy secret
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid gap-3 lg:grid-cols-3">
+                  <div className="rounded-2xl border p-4">
+                    <p className="text-sm font-black">Endpoint</p>
+                    <p className="mt-2 break-all font-mono text-xs">https://tallystore.org/api/partner-api</p>
+                    <p className="mt-2 text-xs text-muted-foreground">Partners send <code>x-tally-api-key</code>. Webhooks are signed with their one-time secret.</p>
+                  </div>
+                  <div className="rounded-2xl border p-4">
+                    <p className="text-sm font-black">Catalogue</p>
+                    <p className="mt-2 font-mono text-xs">{'{ "action": "catalogue", "section": "products" }'}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">Read access requires the server-side partner API gate. Sections include products, SMS, social boost, bills, gift cards, crypto, and Telegram.</p>
+                  </div>
+                  <div className="rounded-2xl border p-4">
+                    <p className="text-sm font-black">Wallet orders</p>
+                    <p className="mt-2 font-mono text-xs">{'{ "action": "create_order", "item_type": "sms", "idempotency_key": "..." }'}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">External paid orders remain paused. Reviewed local product orders require a separate server-side gate.</p>
+                  </div>
+                  <div className="rounded-2xl border p-4 lg:col-span-3">
+                    <p className="text-sm font-black">PocketFi checkout</p>
+                    <p className="mt-2 break-all font-mono text-xs">{'{ "action": "create_checkout", "item_type": "product", "item_id": "...", "customer_reference": "partner-user-123", "customer_email": "buyer@example.com", "idempotency_key": "..." }'}</p>
+                    <p className="mt-2 text-xs text-muted-foreground">PocketFi checkout is paused pending a separate payment and fulfillment review.</p>
+                  </div>
+                </div>
+
+                <div className="grid gap-4 xl:grid-cols-[0.9fr_1.4fr]">
+                  <Card className="rounded-2xl border-slate-200 dark:border-white/10">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Shield className="h-4 w-4 text-primary" />
+                        New trusted partner
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div className="space-y-1">
+                          <Label>Name</Label>
+                          <Input value={newApiPartner.name} onChange={(event) => setNewApiPartner(prev => ({ ...prev, name: event.target.value }))} placeholder="Partner website" disabled={!isPartnerOwner} />
+                        </div>
+                        <div className="space-y-1">
+                          <Label>Webhook URL</Label>
+                          <Input value={newApiPartner.webhook_url} onChange={(event) => setNewApiPartner(prev => ({ ...prev, webhook_url: event.target.value }))} placeholder="https://partner.com/webhook" disabled={!isPartnerOwner} />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>Allowed sections</Label>
+                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                          {PARTNER_SECTIONS.map((section) => (
+                            <label key={section.key} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold">
+                              <Checkbox
+                                checked={newApiPartner.allowed_sections.includes(section.key)}
+                                disabled={!isPartnerOwner}
+                                onCheckedChange={(checked) => setNewApiPartner(prev => ({
+                                  ...prev,
+                                  allowed_sections: checked
+                                    ? Array.from(new Set([...prev.allowed_sections, section.key]))
+                                    : prev.allowed_sections.filter((key) => key !== section.key),
+                                }))}
+                              />
+                              {section.label}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2 text-sm font-semibold">
+                        <Checkbox checked={newApiPartner.unlimited_credit} disabled={!isPartnerOwner}
+                          onCheckedChange={(checked) => setNewApiPartner(prev => ({ ...prev, unlimited_credit: checked === true }))} />
+                        Unlimited partner credit (owner grant)
+                      </label>
+                      {newApiPartner.unlimited_credit && <div className="space-y-1">
+                        <Label>Credit decision reason</Label>
+                        <Input value={newApiPartner.credit_reason} minLength={10} maxLength={500}
+                          onChange={(event) => setNewApiPartner(prev => ({ ...prev, credit_reason: event.target.value }))}
+                          placeholder="Why this partner has unlimited credit" disabled={!isPartnerOwner} />
+                      </div>}
+                      <Button type="button" onClick={createApiPartner} disabled={!isPartnerOwner || apiPartnerSaving === 'create' || (newApiPartner.unlimited_credit && newApiPartner.credit_reason.trim().length < 10)} className="w-full">
+                        {apiPartnerSaving === 'create' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plus className="mr-2 h-4 w-4" />}
+                        {isPartnerOwner ? 'Create reviewed partner' : 'Owner only'}
+                      </Button>
+                    </CardContent>
+                  </Card>
+
+                  <Card className="rounded-2xl border-slate-200 dark:border-white/10">
+                    <CardHeader>
+                      <div className="flex items-center justify-between gap-3">
+                        <CardTitle className="flex items-center gap-2 text-base">
+                          <Users className="h-4 w-4 text-primary" />
+                          Trusted partners
+                        </CardTitle>
+                        <Button type="button" variant="outline" size="sm" onClick={loadApiPartners} disabled={apiPartnersLoading}>
+                          {apiPartnersLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                        </Button>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {apiPartners.length === 0 && !apiPartnersLoading ? (
+                        <p className="rounded-2xl border border-dashed p-6 text-center text-sm text-muted-foreground">No API partners yet.</p>
+                      ) : apiPartners.map((partner) => {
+                        const activeKeys = (partner.api_partner_keys || []).filter((key) => !key.revoked_at)
+                        const editDraft = apiPartnerEditDrafts[partner.id]
+                        return (
+                          <div key={partner.id} className="rounded-2xl border p-4">
+                            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                              <div className="min-w-0">
+                                {editDraft ? (
+                                  <div className="space-y-3">
+                                    <div className="grid gap-3 sm:grid-cols-2">
+                                      <div className="space-y-1">
+                                        <Label>Name</Label>
+                                        <Input
+                                          value={editDraft.name}
+                                          onChange={(event) => setApiPartnerEditDrafts(prev => ({
+                                            ...prev,
+                                            [partner.id]: { ...editDraft, name: event.target.value },
+                                          }))}
+                                          placeholder="Partner website"
+                                          disabled={PARTNER_API_INCIDENT_PAUSED}
+                                        />
+                                      </div>
+                                      <div className="space-y-1">
+                                        <Label>Webhook URL</Label>
+                                        <Input
+                                          value={editDraft.webhook_url}
+                                          onChange={(event) => setApiPartnerEditDrafts(prev => ({
+                                            ...prev,
+                                            [partner.id]: { ...editDraft, webhook_url: event.target.value },
+                                          }))}
+                                          placeholder="https://partner.com/webhook"
+                                          disabled={PARTNER_API_INCIDENT_PAUSED}
+                                        />
+                                      </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                      <Label>Allowed sections</Label>
+                                      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                                        {PARTNER_SECTIONS.map((section) => (
+                                          <label key={section.key} className="flex items-center gap-2 rounded-xl border px-3 py-2 text-xs font-semibold">
+                                            <Checkbox
+                                              checked={editDraft.allowed_sections.includes(section.key)}
+                                              disabled={PARTNER_API_INCIDENT_PAUSED}
+                                              onCheckedChange={(checked) => setApiPartnerEditDrafts(prev => ({
+                                                ...prev,
+                                                [partner.id]: {
+                                                  ...editDraft,
+                                                  allowed_sections: checked
+                                                    ? Array.from(new Set([...editDraft.allowed_sections, section.key]))
+                                                    : editDraft.allowed_sections.filter((key) => key !== section.key),
+                                                },
+                                              }))}
+                                            />
+                                            {section.label}
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">Saving keeps this partner's existing API key and webhook secret unchanged.</p>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="font-black">{partner.name}</p>
+                                      <Badge variant={partner.is_active ? 'default' : 'secondary'}>{partner.is_active ? 'Active' : 'Paused'}</Badge>
+                                      <Badge variant={partner.unlimited_credit ? 'default' : 'secondary'}>{partner.unlimited_credit ? 'Unlimited credit' : `Prepaid · ₦${Number(partner.balance_ngn || 0).toLocaleString()}`}</Badge>
+                                      {!partner.owner_reviewed_at && <Badge variant="destructive">Legacy review required</Badge>}
+                                      <Badge variant="outline">{activeKeys.length} active key(s)</Badge>
+                                      <Badge variant={partner.has_webhook_secret ? 'outline' : 'destructive'}>
+                                        {partner.has_webhook_secret ? 'Webhook secret stored' : 'No webhook secret'}
+                                      </Badge>
+                                    </div>
+                                    <p className="mt-1 text-xs text-muted-foreground">{partner.allowed_sections?.join(', ')}</p>
+                                    {partner.webhook_url ? (
+                                      <p className="mt-2 break-all text-xs text-muted-foreground">{partner.webhook_url}</p>
+                                    ) : (
+                                      <p className="mt-2 text-xs text-muted-foreground">No webhook URL set.</p>
+                                    )}
+                                    <p className="mt-2 text-xs text-muted-foreground">
+                                      Full API keys and webhook secrets are only shown immediately after generation.
+                                    </p>
+                                  </>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {editDraft ? (
+                                  <>
+                                    <Button size="sm" onClick={() => saveApiPartnerEdit(partner.id)} disabled={PARTNER_API_INCIDENT_PAUSED || apiPartnerSaving === partner.id}>
+                                      {apiPartnerSaving === partner.id ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <CheckCircle2 className="mr-2 h-3 w-3" />}
+                                      Save
+                                    </Button>
+                                    <Button size="sm" variant="outline" onClick={() => cancelApiPartnerEdit(partner.id)} disabled={apiPartnerSaving === partner.id}>
+                                      <X className="mr-2 h-3 w-3" />
+                                      Cancel
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Button size="sm" variant="outline" onClick={() => startApiPartnerEdit(partner)} disabled={PARTNER_API_INCIDENT_PAUSED || Boolean(apiPartnerSaving)}>
+                                      <Edit className="mr-2 h-3 w-3" />
+                                      Edit
+                                    </Button>
+                                    <Button size="sm" variant="outline" onClick={() => updateApiPartner(partner.id, { is_active: !partner.is_active })} disabled={PARTNER_API_INCIDENT_PAUSED || apiPartnerSaving === partner.id}>
+                                      {partner.is_active ? 'Pause' : 'Enable'}
+                                    </Button>
+                                    <Button size="sm" onClick={() => generateApiPartnerKey(partner.id)} disabled={!isPartnerOwner || !partner.owner_reviewed_at || apiPartnerSaving === `key-${partner.id}`}>
+                                      {apiPartnerSaving === `key-${partner.id}` ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
+                                      Generate API key + secret
+                                    </Button>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+
+                            {isPartnerOwner && <div className="mt-4 flex flex-wrap items-end gap-2 border-t pt-3">
+                              <label className="min-w-56 flex-1 space-y-1 text-xs font-semibold">
+                                Credit decision reason
+                                <Input value={apiPartnerCreditReasons[partner.id] || ''} maxLength={500}
+                                  onChange={(event) => setApiPartnerCreditReasons(prev => ({ ...prev, [partner.id]: event.target.value }))}
+                                  placeholder="Explain this credit mode change" />
+                              </label>
+                              <Button size="sm" variant="outline" onClick={() => void setApiPartnerCredit(partner)}
+                                disabled={apiPartnerSaving === `credit-${partner.id}` || (apiPartnerCreditReasons[partner.id]?.trim().length || 0) < 10}>
+                                {partner.unlimited_credit ? 'Switch to prepaid' : 'Grant unlimited credit'}
+                              </Button>
+                            </div>}
+
+                            {isPartnerOwner && !partner.unlimited_credit && <div className="mt-3 flex flex-wrap items-end gap-2">
+                              <label className="space-y-1 text-xs font-semibold">Prepaid adjustment (₦)
+                                <Input type="number" step="0.01" className="w-36"
+                                  value={apiPartnerBalanceDrafts[partner.id]?.amount || ''}
+                                  onChange={(event) => setApiPartnerBalanceDrafts(prev => ({ ...prev,
+                                    [partner.id]: { amount: event.target.value, reason: prev[partner.id]?.reason || '' } }))} />
+                              </label>
+                              <label className="min-w-48 flex-1 space-y-1 text-xs font-semibold">Adjustment reason
+                                <Input value={apiPartnerBalanceDrafts[partner.id]?.reason || ''}
+                                  onChange={(event) => setApiPartnerBalanceDrafts(prev => ({ ...prev,
+                                    [partner.id]: { amount: prev[partner.id]?.amount || '', reason: event.target.value } }))} />
+                              </label>
+                              <Button size="sm" variant="outline" onClick={() => void adjustApiPartnerBalance(partner)}
+                                disabled={apiPartnerSaving === `balance-${partner.id}` || !apiPartnerBalanceDrafts[partner.id]?.amount || !apiPartnerBalanceDrafts[partner.id]?.reason.trim()}>
+                                Adjust balance
+                              </Button>
+                            </div>}
+
+                            {(partner.api_partner_keys || []).length > 0 && (
+                              <div className="mt-4 space-y-2">
+                                <p className="text-xs font-black uppercase tracking-wide text-muted-foreground">Keys</p>
+                                {(partner.api_partner_keys || []).map((key) => (
+                                  <div key={key.id} className="flex flex-col gap-2 rounded-xl bg-muted/40 px-3 py-2 text-xs sm:flex-row sm:items-center sm:justify-between">
+                                    <span className="font-mono">{key.key_prefix}...</span>
+                                    <span className="text-muted-foreground">Last used: {key.last_used_at ? formatDistanceToNow(new Date(key.last_used_at), { addSuffix: true }) : 'Never'}</span>
+                                    {key.revoked_at ? (
+                                      <Badge variant="secondary">Revoked</Badge>
+                                    ) : (
+                                      <Button size="sm" variant="destructive" onClick={() => revokeApiPartnerKey(key.id)} disabled={!isPartnerOwner || apiPartnerSaving === `revoke-${key.id}`}>
+                                        Revoke
+                                      </Button>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </CardContent>
+                  </Card>
+                </div>
+              </AdminControlSection>
+
+              {isPartnerOwner && user?.id && (
+                <PartnerReconciliationPanel
+                  key={user.id}
+                  ownerId={user.id}
+                  active={adminTab === 'api-partners'}
+                  invoke={invokePartnerAdmin}
+                />
+              )}
+
+              <div className="grid gap-6 xl:grid-cols-2">
+                <AdminControlSection title="Recent API Orders" description="Latest reseller orders created through partner-api.">
+                  <div className="space-y-3">
+                    {apiPartnerOrders.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No partner orders yet.</p>
+                    ) : apiPartnerOrders.slice(0, 12).map((order) => (
+                      <div key={order.id} className="flex items-center justify-between gap-3 rounded-2xl border p-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black">{order.item_name || order.id}</p>
+                          <p className="text-xs text-muted-foreground">{order.item_type} · qty {order.quantity} · {formatDistanceToNow(new Date(order.created_at), { addSuffix: true })}</p>
+                          {order.payment_provider && <p className="mt-1 truncate text-xs text-muted-foreground">{order.payment_provider} · {order.payment_account_number || order.payment_transaction_reference || 'checkout pending'} · {order.paid_at ? 'paid' : 'unpaid'}</p>}
+                          {order.error_message && <p className="mt-1 truncate text-xs text-red-500">{order.error_message}</p>}
+                        </div>
+                        <div className="text-right">
+                          <Badge variant={order.status === 'failed' ? 'destructive' : order.status === 'completed' ? 'default' : 'secondary'}>{order.status}</Badge>
+                          <p className="mt-1 text-xs font-bold">₦{Number(order.amount_ngn || 0).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </AdminControlSection>
+
+                <AdminControlSection title="Recent API Logs" description="Request audit trail for partner websites and failed attempts.">
+                  <div className="space-y-3">
+                    {apiPartnerLogs.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">No partner API calls logged yet.</p>
+                    ) : apiPartnerLogs.slice(0, 12).map((log) => (
+                      <div key={log.id} className="flex items-center justify-between gap-3 rounded-2xl border p-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-black">{log.action || 'request'}</p>
+                          <p className="text-xs text-muted-foreground">{formatDistanceToNow(new Date(log.created_at), { addSuffix: true })}</p>
+                          {log.error_message && <p className="mt-1 truncate text-xs text-red-500">{log.error_message}</p>}
+                        </div>
+                        <Badge variant={log.success ? 'default' : 'destructive'}>{log.status_code || 0}</Badge>
+                      </div>
+                    ))}
+                  </div>
+                </AdminControlSection>
+              </div>
+
+              <AdminControlSection title="Partner Webhooks" description="Delivery attempts sent to partner webhook URLs when API order status changes.">
+                <div className="space-y-3">
+                  {apiPartnerWebhooks.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">No partner webhooks sent yet.</p>
+                  ) : apiPartnerWebhooks.slice(0, 12).map((delivery) => (
+                    <div key={delivery.id} className="flex items-center justify-between gap-3 rounded-2xl border p-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-black">{delivery.event_type}</p>
+                        <p className="truncate text-xs text-muted-foreground">{delivery.target_url}</p>
+                        {delivery.error_message && <p className="mt-1 truncate text-xs text-red-500">{delivery.error_message}</p>}
+                      </div>
+                      <div className="text-right">
+                        <Badge variant={delivery.status === 'delivered' ? 'default' : delivery.status === 'failed' ? 'destructive' : 'secondary'}>
+                          {delivery.status}
+                        </Badge>
+                        <p className="mt-1 text-xs text-muted-foreground">{delivery.status_code || 'no code'} · {formatDistanceToNow(new Date(delivery.created_at), { addSuffix: true })}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </AdminControlSection>
+            </TabsContent>
+
+            {/* ── Staff Roles Tab ──────────────────────────────────────────── */}
+            <TabsContent value="staff" className="space-y-6">
+
+              {/* Pending Approvals */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="flex items-center gap-2"><Clock className="h-5 w-5" /> Pending Approvals</CardTitle>
+                      <p className="text-muted-foreground text-sm mt-1">Staff actions waiting for your review</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={loadPendingActions} disabled={loadingPendingActions}>
+                      <RefreshCw className={`h-4 w-4 mr-1 ${loadingPendingActions ? 'animate-spin' : ''}`} /> Refresh
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {loadingPendingActions ? (
+                    <div className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" /> Loading…</div>
+                  ) : pendingActions.length === 0 ? (
+                    <p className="text-muted-foreground text-sm">No pending actions — you're all caught up.</p>
+                  ) : (
+                    <div className="space-y-3">
+                      {pendingActions.map(action => (
+                        <div key={action.id} className="flex items-center justify-between p-3 rounded-lg border">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-sm">{action.action_label}</p>
+                            <p className="text-xs text-muted-foreground">By {action.staff_email} · {format(new Date(action.created_at), 'dd MMM HH:mm')}</p>
+                          </div>
+                          <div className="flex items-center gap-2 ml-3 shrink-0">
+                            <Button
+                              size="sm"
+                              onClick={() => handleApproveAction(action)}
+                              disabled={approvingAction === action.id}
+                              className="bg-green-600 hover:bg-green-700"
+                            >
+                              {approvingAction === action.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3 mr-1" />}
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => handleRejectAction(action.id)}
+                              className="border-red-300 text-red-600 hover:bg-red-50"
+                            >
+                              <XCircle className="h-3 w-3 mr-1" /> Reject
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Grant staff role */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><UserCheck className="h-5 w-5" /> Grant Staff Access</CardTitle>
+                  <p className="text-muted-foreground text-sm">Search a user by email and give them the staff role</p>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Search by email..."
+                      value={staffSearchQuery}
+                      onChange={e => setStaffSearchQuery(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleSearchForStaff()}
+                    />
+                    <Button onClick={handleSearchForStaff} disabled={staffSearching}>
+                      {staffSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+                    </Button>
+                  </div>
+                  {staffSearchResults.length > 0 && (
+                    <div className="space-y-2">
+                      {staffSearchResults.map((u: any) => (
+                        <div key={u.id} className="flex items-center justify-between p-3 rounded-lg border text-sm">
+                          <div>
+                            <p className="font-medium">{u.email}</p>
+                            <p className="text-muted-foreground text-xs">Balance: ₦{(u.wallet_balance || 0).toLocaleString()}</p>
+                          </div>
+                          {u.is_staff ? (
+                            <Button size="sm" variant="outline" className="border-red-300 text-red-600" onClick={() => handleRevokeStaff(u.id)}>
+                              <UserX className="h-3.5 w-3.5 mr-1" /> Revoke Staff
+                            </Button>
+                          ) : (
+                            <Button size="sm" onClick={() => handleGrantStaff(u.id)}>
+                              <UserCheck className="h-3.5 w-3.5 mr-1" /> Grant Staff
+                            </Button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Permission matrix for each staff user */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2"><Shield className="h-5 w-5" /> Staff Permissions</CardTitle>
+                  <p className="text-muted-foreground text-sm">Choose what each staff member can view or submit. Every staff change requires your approval before it takes effect.</p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {staffUsers.length === 0 ? (
+                    <p className="text-muted-foreground text-sm">No staff members yet. Grant someone the staff role above.</p>
+                  ) : (
+                    staffUsers.map((su: any) => {
+                      const isExpanded = expandedStaffUser === su.id
+                      const userPerms = staffPermissionsMap[su.id] || {}
+                      return (
+                        <div key={su.id} className="border rounded-lg overflow-hidden">
+                          <button
+                            className="w-full flex items-center justify-between p-3 text-sm font-medium hover:bg-muted/50 transition-colors"
+                            onClick={() => {
+                              if (!isExpanded) loadStaffPermsForUser(su.id)
+                              setExpandedStaffUser(isExpanded ? null : su.id)
+                            }}
+                          >
+                            <span className="flex items-center gap-2">
+                              <Shield className="h-4 w-4 text-primary" />
+                              {su.email}
+                            </span>
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-red-300 text-red-600 h-7 text-xs"
+                                onClick={e => { e.stopPropagation(); handleRevokeStaff(su.id) }}
+                              >
+                                <UserX className="h-3 w-3 mr-1" /> Revoke
+                              </Button>
+                              <span className="text-muted-foreground">{isExpanded ? '▲' : '▼'}</span>
+                            </div>
+                          </button>
+                          {isExpanded && (
+                            <div className="border-t divide-y">
+                              {/* Group by permission group */}
+                              {(['Overview', 'Tabs', 'Settings', 'Actions'] as const).map(group => {
+                                const groupPerms = PERMISSIONS.filter(p => p.group === group)
+                                return (
+                                  <div key={group} className="p-3 space-y-2">
+                                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">{group}</p>
+                                    {groupPerms.map(p => {
+                                      const perm = userPerms[p.key] || { is_enabled: false, auto_approve: false }
+                                      const savingKey = `${su.id}-${p.key}`
+                                      return (
+                                        <div key={p.key} className="flex items-center justify-between py-1">
+                                          <div className="min-w-0 flex-1 mr-4">
+                                            <p className="text-sm font-medium">{p.label}</p>
+                                            <p className="text-xs text-muted-foreground">{p.description}</p>
+                                          </div>
+                                          <div className="flex items-center gap-3 shrink-0">
+                                            {/* Enable/Disable */}
+                                            <button
+                                              className="flex items-center gap-1 text-xs"
+                                              onClick={() => handleToggleStaffPerm(su.id, p.key, !perm.is_enabled)}
+                                              disabled={!!savingStaffPerm?.startsWith(savingKey)}
+                                            >
+                                              {perm.is_enabled
+                                                ? <ToggleRight className="h-5 w-5 text-green-600" />
+                                                : <ToggleLeft className="h-5 w-5 text-muted-foreground" />}
+                                              <span className={perm.is_enabled ? 'text-green-700 font-medium' : 'text-muted-foreground'}>
+                                                {perm.is_enabled ? 'On' : 'Off'}
+                                              </span>
+                                            </button>
+                                            {perm.is_enabled && (
+                                              perm.auto_approve ? (
+                                                <span className="flex items-center gap-1 rounded border border-green-300 bg-green-50 px-2 py-0.5 text-xs text-green-700 dark:border-green-700 dark:bg-green-900/20 dark:text-green-400">
+                                                  <CheckCircle2 className="h-3 w-3" /> Automatic
+                                                </span>
+                                              ) : (
+                                                <span className="flex items-center gap-1 rounded border border-orange-300 bg-orange-50 px-2 py-0.5 text-xs text-orange-700 dark:border-orange-700 dark:bg-orange-900/20 dark:text-orange-400">
+                                                  <Clock className="h-3 w-3" /> Needs Approval
+                                                </span>
+                                              )
+                                            )}
+                                          </div>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })
+                  )}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* SMS Orders Management */}
+            <TabsContent value="sms-orders" className="space-y-6">
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <CardTitle>SMS Orders</CardTitle>
+                      <p className="mt-1 text-sm text-muted-foreground">Orders without a code are checked automatically for cancellation after 30 minutes. Refunds require supplier confirmation. Missing allocations remain under review.</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="outline" size="sm" onClick={loadSmsOrders} disabled={smsOrdersLoading}>
+                        {smsOrdersLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                        Refresh
+                      </Button>
+                      <Button variant="destructive" size="sm" onClick={adminAutoCancelStale} disabled={smsOrdersAutoCancelling || smsOrdersLoading}>
+                        {smsOrdersAutoCancelling ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}
+                        Check cancellation (30 min+)
+                      </Button>
+                    </div>
+                  </div>
+                  {/* Filter */}
+                  <div className="mt-3 flex gap-2">
+                    {(['all', 'pending', 'completed', 'cancelled'] as const).map(f => (
+                      <button
+                        key={f}
+                        onClick={() => setSmsOrdersFilter(f)}
+                        className={`rounded-full px-3 py-1 text-xs font-semibold capitalize transition-colors ${smsOrdersFilter === f ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/80'}`}
+                      >
+                        {f}
+                      </button>
+                    ))}
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {smsOrders.length === 0 && !smsOrdersLoading && (
+                    <div className="py-8 text-center text-sm text-muted-foreground">
+                      No SMS orders yet.{' '}
+                      <button className="underline" onClick={loadSmsOrders}>Load orders</button>
+                    </div>
+                  )}
+                  {smsOrdersLoading && (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                    </div>
+                  )}
+                  {!smsOrdersLoading && smsOrders.length > 0 && (() => {
+                    const isPending = (o: any) => !['completed', 'cancelled', 'expired', 'failed'].includes(o.status)
+                    const filtered = smsOrders.filter(o => {
+                      if (smsOrdersFilter === 'pending') return isPending(o)
+                      if (smsOrdersFilter === 'completed') return o.status === 'completed'
+                      if (smsOrdersFilter === 'cancelled') return o.status === 'cancelled'
+                      return true
+                    })
+                    const now = Date.now()
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b text-left text-xs font-semibold uppercase text-muted-foreground">
+                              <th className="pb-2 pr-4">User</th>
+                              <th className="pb-2 pr-4">Service</th>
+                              <th className="pb-2 pr-4">Amount</th>
+                              <th className="pb-2 pr-4">Status</th>
+                              <th className="pb-2 pr-4">Time pending</th>
+                              <th className="pb-2 pr-4">Refunded</th>
+                              <th className="pb-2">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {filtered.map(order => {
+                              const pending = isPending(order)
+                              const minsPending = Math.floor((now - new Date(order.created_at).getTime()) / 60000)
+                              const isStale = pending && minsPending >= 30
+                              const hasCode = order.has_code
+                              return (
+                                <tr key={order.id} className={`text-sm ${isStale && !hasCode ? 'bg-red-50 dark:bg-red-950/20' : ''}`}>
+                                  <td className="py-2 pr-4">
+                                    <p className="font-medium">{order.profiles?.full_name || '—'}</p>
+                                    <p className="text-xs text-muted-foreground">{order.profiles?.email || '—'}</p>
+                                  </td>
+                                  <td className="py-2 pr-4">{order.service_name}</td>
+                                  <td className="py-2 pr-4 font-semibold">₦{Number(order.price_ngn).toLocaleString()}</td>
+                                  <td className="py-2 pr-4">
+                                    <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${
+                                      order.status === 'completed' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                                      : order.status === 'cancelled' ? 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                                      : isStale ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                                      : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                                    }`}>
+                                      {order.status}
+                                    </span>
+                                  </td>
+                                  <td className="py-2 pr-4 text-xs text-muted-foreground">
+                                    {pending
+                                      ? <span className={isStale && !hasCode ? 'font-bold text-red-600' : ''}>{minsPending}m ago</span>
+                                      : new Date(order.created_at).toLocaleDateString()}
+                                  </td>
+                                  <td className="py-2 pr-4">
+                                    {order.refunded_at
+                                      ? <span className="text-xs text-emerald-600">✓ Refunded</span>
+                                      : order.status === 'cancelled'
+                                        ? <span className="text-xs text-amber-600">Refund review</span>
+                                        : <span className="text-xs text-muted-foreground">—</span>}
+                                  </td>
+                                  <td className="py-2">
+                                    {pending && (
+                                      <Button
+                                        size="sm"
+                                        variant="destructive"
+                                        className="h-7 px-2 text-xs"
+                                        disabled={smsOrdersCancellingId === order.id}
+                                        onClick={() => adminCancelSmsOrder(order.id)}
+                                      >
+                                        {smsOrdersCancellingId === order.id
+                                          ? <Loader2 className="h-3 w-3 animate-spin" />
+                                          : 'Cancel order'}
+                                      </Button>
+                                    )}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                        {filtered.length === 0 && (
+                          <p className="py-6 text-center text-sm text-muted-foreground">No {smsOrdersFilter} orders.</p>
+                        )}
+                      </div>
+                    )
+                  })()}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
+            {/* ── Telegram Stars & Premium ──────────────────────────────── */}
+            <TabsContent value="telegram-stars" className="space-y-6">
+              {/* iStar wallet */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2 text-base">
+                    iStar Wallet
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="text-sm font-medium">Pay iStar with:</span>
+                    {(['USDT', 'TON'] as const).map(type => (
+                      <Button
+                        key={type}
+                        size="sm"
+                        variant={tgWalletType === type ? 'default' : 'outline'}
+                        onClick={() => saveTgWalletType(type)}
+                      >
+                        {type}
+                      </Button>
+                    ))}
+                    <Button size="sm" variant="outline" onClick={checkTgWalletBalance} disabled={tgWalletBalanceLoading}>
+                      {tgWalletBalanceLoading ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+                      Check Balance
+                    </Button>
+                    {tgWalletBalance && (
+                      <span className="text-sm font-semibold">
+                        {tgWalletBalance.balance} {tgWalletBalance.currency}
+                      </span>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* ── Star pricing ───────────────────────────────────────── */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-base">⭐ Star Pricing Config</CardTitle>
+                      <p className="text-xs text-muted-foreground mt-0.5">Set what iStar charges per star and your markup tiers. Customer price = (iStar cost × qty × NGN rate) + tier markup.</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={loadTgProducts} disabled={tgProductsLoading}>
+                      {tgProductsLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-2 h-3 w-3" />}
+                      {tgProducts.length === 0 ? 'Load' : 'Refresh'}
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent className="space-y-5">
+                  {/* iStar cost per star */}
+                  <div className="flex flex-wrap items-end gap-3">
+                    <div className="flex-1 min-w-48">
+                      <label className="text-xs font-medium mb-1 block">iStar cost per star (USDT)</label>
+                      <Input
+                        type="number"
+                        step="0.0001"
+                        className="h-8 text-sm"
+                        value={tgProductPrices['__cost_per_star__'] ?? '0.013'}
+                        onChange={e => setTgProductPrices(prev => ({ ...prev, '__cost_per_star__': e.target.value }))}
+                        placeholder="e.g. 0.013"
+                      />
+                      <p className="text-[11px] text-muted-foreground mt-1">Check your iStar dashboard / order history to find the actual per-star USDT rate.</p>
+                    </div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8"
+                      disabled={tgProductSaving === '__cost__'}
+                      onClick={async () => {
+                        setTgProductSaving('__cost__')
+                        try {
+                          const { data, error } = await supabase.functions.invoke('telegram-stars', {
+                            body: { action: 'admin_save_star_config', cost_per_star_usdt: Number(tgProductPrices['__cost_per_star__'] || 0.013) }
+                          })
+                          if (error) throw error
+                          toast({ title: 'Star cost saved' })
+                        } catch (err: any) {
+                          toast({ title: 'Save failed', description: err.message, variant: 'destructive' })
+                        } finally { setTgProductSaving(null) }
+                      }}
+                    >
+                      {tgProductSaving === '__cost__' ? <Loader2 className="h-3 w-3 animate-spin" /> : 'Save Cost'}
+                    </Button>
+                  </div>
+
+                  {/* Markup tiers */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-medium">Markup Tiers (₦ added on top of iStar cost)</label>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          const current: any[] = (() => { try { return JSON.parse(tgProductPrices['__tiers__'] || '[]') } catch { return [] } })()
+                          const updated = [...current, { min_qty: 0, max_qty: null, markup_ngn: 0 }]
+                          setTgProductPrices(prev => ({ ...prev, '__tiers__': JSON.stringify(updated) }))
+                        }}
+                      >
+                        + Add Tier
+                      </Button>
+                    </div>
+                    {(() => {
+                      let tiers: any[] = []
+                      try { tiers = JSON.parse(tgProductPrices['__tiers__'] || '[]') } catch { tiers = [] }
+                      if (tiers.length === 0) return <p className="text-xs text-muted-foreground py-2">No tiers yet. Add a tier to set markup by quantity range.</p>
+                      return (
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 text-xs text-muted-foreground px-1">
+                            <span>Min qty</span><span>Max qty</span><span>Markup (₦)</span><span/>
+                          </div>
+                          {tiers.map((tier: any, idx: number) => (
+                            <div key={idx} className="grid grid-cols-[1fr_1fr_1fr_auto] gap-2 items-center">
+                              <Input
+                                type="number" className="h-8 text-sm" placeholder="e.g. 50"
+                                value={tier.min_qty ?? ''}
+                                onChange={e => {
+                                  const updated = [...tiers]; updated[idx] = { ...tier, min_qty: Number(e.target.value) }
+                                  setTgProductPrices(prev => ({ ...prev, '__tiers__': JSON.stringify(updated) }))
+                                }}
+                              />
+                              <Input
+                                type="number" className="h-8 text-sm" placeholder="blank = no max"
+                                value={tier.max_qty ?? ''}
+                                onChange={e => {
+                                  const updated = [...tiers]; updated[idx] = { ...tier, max_qty: e.target.value === '' ? null : Number(e.target.value) }
+                                  setTgProductPrices(prev => ({ ...prev, '__tiers__': JSON.stringify(updated) }))
+                                }}
+                              />
+                              <Input
+                                type="number" className="h-8 text-sm" placeholder="e.g. 500"
+                                value={tier.markup_ngn ?? ''}
+                                onChange={e => {
+                                  const updated = [...tiers]; updated[idx] = { ...tier, markup_ngn: Number(e.target.value) }
+                                  setTgProductPrices(prev => ({ ...prev, '__tiers__': JSON.stringify(updated) }))
+                                }}
+                              />
+                              <Button
+                                size="sm" variant="ghost" className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                                onClick={() => {
+                                  const updated = tiers.filter((_: any, i: number) => i !== idx)
+                                  setTgProductPrices(prev => ({ ...prev, '__tiers__': JSON.stringify(updated) }))
+                                }}
+                              ><XCircle className="h-4 w-4" /></Button>
+                            </div>
+                          ))}
+                          <Button
+                            size="sm" variant="outline" className="w-full mt-2"
+                            disabled={tgProductSaving === '__tiers__'}
+                            onClick={async () => {
+                              setTgProductSaving('__tiers__')
+                              try {
+                                const { data, error } = await supabase.functions.invoke('telegram-stars', {
+                                  body: { action: 'admin_save_star_config', markup_tiers: tiers }
+                                })
+                                if (error) throw error
+                                toast({ title: 'Markup tiers saved' })
+                              } catch (err: any) {
+                                toast({ title: 'Save failed', description: err.message, variant: 'destructive' })
+                              } finally { setTgProductSaving(null) }
+                            }}
+                          >
+                            {tgProductSaving === '__tiers__' ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : null}
+                            Save Tiers
+                          </Button>
+                        </div>
+                      )
+                    })()}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* ── Premium pricing ────────────────────────────────────── */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">👑 Premium Pricing</CardTitle>
+                    <Button variant="outline" size="sm" onClick={loadTgProducts} disabled={tgProductsLoading}>
+                      {tgProductsLoading ? <Loader2 className="mr-2 h-3 w-3 animate-spin" /> : <RefreshCw className="mr-2 h-3 w-3" />}
+                      {tgProducts.length === 0 ? 'Load' : 'Refresh'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Prices are auto-calculated: <strong>iStar USDT cost × live NGN rate + your markup</strong>. The USDT cost is learned automatically after each real order.
+                  </p>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  {tgProductsLoading && <div className="flex justify-center py-4"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+                  {!tgProductsLoading && (
+                    <>
+                      {tgProducts.filter(p => p.product_type === 'premium').length === 0 && (
+                        <p className="text-center text-sm text-muted-foreground py-2">Click "Load" to view premium tiers.</p>
+                      )}
+                      {tgProducts.filter(p => p.product_type === 'premium').map(product => {
+                        const costKey = `__telegram_premium_cost_usdt_${product.months}m__`
+                        const markupKey = `__telegram_premium_markup_ngn_${product.months}m__`
+                        const istarCost = Number(tgProductPrices[costKey] || 0)
+                        const usdtToNgn = Number(tgProductPrices['__usdt_to_ngn__'] || 0)
+                        const markup = Number(tgProductPrices[markupKey] || 0)
+                        const livePrice = istarCost > 0 && usdtToNgn > 0 ? Math.ceil((istarCost * usdtToNgn + markup) / 10) * 10 : product.price_ngn
+                        return (
+                          <div key={product.id} className="rounded-md border border-border p-3 space-y-2">
+                            <div className="flex items-center gap-3">
+                              <Switch checked={product.is_active} onCheckedChange={() => toggleTgProduct(product)} />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium">{product.label}</p>
+                                {istarCost > 0
+                                  ? <p className="text-xs text-muted-foreground">iStar cost: ${istarCost.toFixed(4)} USDT × ₦{usdtToNgn.toLocaleString()} = ₦{(Math.ceil((istarCost * usdtToNgn) / 10) * 10).toLocaleString()} base</p>
+                                  : <p className="text-xs text-amber-500">iStar cost unavailable — check API connection</p>
+                                }
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-semibold">₦{livePrice.toLocaleString()}</p>
+                                <p className="text-xs text-muted-foreground">live price</p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 pl-10">
+                              <label className="text-xs text-muted-foreground whitespace-nowrap">Your markup (₦):</label>
+                              <Input
+                                type="number" className="h-7 text-xs w-28"
+                                value={tgProductPrices[markupKey] ?? '0'}
+                                onChange={e => setTgProductPrices(prev => ({ ...prev, [markupKey]: e.target.value }))}
+                              />
+                              <Button size="sm" variant="outline" className="h-7 text-xs px-2" onClick={async () => {
+                                const { error } = await supabase.functions.invoke('telegram-stars', {
+                                  body: { action: 'admin_save_star_config', premium_markup_per_tier: { [String(product.months)]: Number(tgProductPrices[markupKey] || 0) } }
+                                })
+                                if (error) { toast({ title: 'Save failed', description: error.message, variant: 'destructive' }); return }
+                                toast({ title: `${product.label} markup saved` })
+                              }}>Save</Button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Order history */}
+              <Card>
+                <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <CardTitle className="text-base">Telegram Orders</CardTitle>
+                      <p className="mt-1 text-sm text-muted-foreground">All stars and premium gift orders.</p>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={loadTgOrders} disabled={tgOrdersLoading}>
+                      {tgOrdersLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
+                      {tgOrders.length === 0 ? 'Load Orders' : 'Refresh'}
+                    </Button>
+                  </div>
+                  {tgOrders.length > 0 && (
+                    <div className="flex flex-wrap gap-2 mt-3">
+                      {(['all', 'pending', 'processing', 'completed', 'failed'] as const).map(f => (
+                        <button
+                          key={f}
+                          onClick={() => setTgOrdersFilter(f)}
+                          className={`rounded-full px-3 py-1 text-xs font-medium border transition-colors ${tgOrdersFilter === f ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:border-primary/50'}`}
+                        >
+                          {f.charAt(0).toUpperCase() + f.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </CardHeader>
+                <CardContent>
+                  {tgOrders.length === 0 && !tgOrdersLoading && (
+                    <p className="py-6 text-center text-sm text-muted-foreground">No orders yet. Click "Load Orders" to fetch.</p>
+                  )}
+                  {tgOrdersLoading && <div className="flex justify-center py-6"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>}
+                  {!tgOrdersLoading && tgOrders.length > 0 && (() => {
+                    const filtered = tgOrdersFilter === 'all' ? tgOrders : tgOrders.filter(o => o.status === tgOrdersFilter)
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b text-xs text-muted-foreground">
+                              <th className="pb-2 pr-4 text-left font-medium">User</th>
+                              <th className="pb-2 pr-4 text-left font-medium">Type</th>
+                              <th className="pb-2 pr-4 text-left font-medium">Recipient</th>
+                              <th className="pb-2 pr-4 text-left font-medium">Amount</th>
+                              <th className="pb-2 pr-4 text-left font-medium">Status</th>
+                              <th className="pb-2 pr-4 text-left font-medium">Date</th>
+                              <th className="pb-2 text-left font-medium">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y">
+                            {filtered.map(order => {
+                              const terminal = ['completed', 'failed'].includes(order.status)
+                              return (
+                                <tr key={order.id} className="hover:bg-muted/30">
+                                  <td className="py-2 pr-4 text-xs">
+                                    <div>{order.profiles?.full_name || '—'}</div>
+                                    <div className="text-muted-foreground">{order.profiles?.email || ''}</div>
+                                  </td>
+                                  <td className="py-2 pr-4 text-xs">
+                                    {order.order_type === 'stars' ? `⭐ ${order.quantity?.toLocaleString()} Stars` : `👑 ${order.months}mo Premium`}
+                                  </td>
+                                  <td className="py-2 pr-4 text-xs">@{order.username}</td>
+                                  <td className="py-2 pr-4 text-xs font-medium">₦{Number(order.price_ngn).toLocaleString()}</td>
+                                  <td className="py-2 pr-4 text-xs">
+                                    <span className={`font-medium ${order.status === 'completed' ? 'text-green-600' : order.status === 'failed' ? 'text-red-600' : order.status === 'processing' ? 'text-blue-600' : 'text-amber-600'}`}>
+                                      {order.status}
+                                    </span>
+                                    {order.refunded_at && <span className="ml-1 text-emerald-600">✓ refunded</span>}
+                                  </td>
+                                  <td className="py-2 pr-4 text-xs text-muted-foreground">
+                                    {new Date(order.created_at).toLocaleDateString()}
+                                  </td>
+                                  <td className="py-2">
+                                    {!terminal && (
+                                      <span className="text-xs text-amber-700" title="Supplier outcome must be confirmed before cancellation or refund">
+                                        Manual review
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                        {filtered.length === 0 && (
+                          <p className="py-6 text-center text-sm text-muted-foreground">No {tgOrdersFilter} orders.</p>
+                        )}
+                      </div>
+                    )
+                  })()}
+                </CardContent>
+              </Card>
+            </TabsContent>
+
           </Tabs>
+          </div>
         </div>
       </div>
 

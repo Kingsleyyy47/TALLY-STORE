@@ -1,6 +1,7 @@
 import { useAuth } from '@/contexts/SimpleAuth'
+import { useCurrency } from '@/contexts/CurrencyContext'
 import { Card, CardContent } from '@/components/ui/card'
-import { Wallet, RefreshCw } from 'lucide-react'
+import { Wallet, RefreshCw, Loader2, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 interface WalletBalanceWidgetProps {
@@ -14,7 +15,8 @@ export default function WalletBalanceWidget({
   showRefresh = false,
   size = 'md' 
 }: WalletBalanceWidgetProps) {
-  const { walletBalance, refreshWalletBalance, isAdmin } = useAuth()
+  const { walletBalance, walletLoading, walletBalanceUnavailable, refreshWalletBalance, isAdmin, showBalances, toggleBalanceVisibility } = useAuth()
+  const { formatPrice } = useCurrency()
 
   // Don't show for admin users
   if (isAdmin) return null
@@ -40,20 +42,35 @@ export default function WalletBalanceWidget({
             <span className="font-medium text-foreground">Wallet Balance:</span>
           </div>
           <span className="font-bold text-primary text-lg">
-            ₦{walletBalance?.toLocaleString() || '0.00'}
+            {walletLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin inline" />
+            ) : (
+              <>{walletBalanceUnavailable ? 'Unavailable' : showBalances ? formatPrice(walletBalance || 0) : '***'}</>
+            )}
           </span>
         </div>
         
-        {showRefresh && (
+        <div className="flex items-center gap-1">
           <Button
             variant="ghost"
             size="sm"
-            onClick={refreshWalletBalance}
+            onClick={toggleBalanceVisibility}
             className="text-primary hover:text-primary/80"
+            aria-label={showBalances ? 'Hide balances' : 'Show balances'}
           >
-            <RefreshCw className="h-4 w-4" />
+            {showBalances ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
           </Button>
-        )}
+          {showRefresh && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={refreshWalletBalance}
+              className="text-primary hover:text-primary/80"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
       </CardContent>
     </Card>
   )

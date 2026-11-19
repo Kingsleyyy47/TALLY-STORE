@@ -1,24 +1,116 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react-swc";
 import path from "path";
+import { VitePWA } from 'vite-plugin-pwa';
+import publicBackend from './deployment/public-backend.json';
+
+// Public browser configuration only. Customer maintenance stays enabled while
+// the destination is verified. Server-side payment callback routing continues
+// to use its existing environment until the financial handover is complete.
+if (publicBackend.projectRef !== 'ktmlojvchkmzcdbjdyjx' ||
+    publicBackend.url !== 'https://ktmlojvchkmzcdbjdyjx.supabase.co' ||
+    publicBackend.mode !== 'maintenance-target-verification') {
+  throw new Error('Unexpected maintenance backend selection');
+}
+const publicKeyClaims = JSON.parse(Buffer.from(publicBackend.anonKey.split('.')[1], 'base64url').toString('utf8'));
+if (publicKeyClaims.role !== 'anon' || publicKeyClaims.ref !== publicBackend.projectRef) {
+  throw new Error('Browser configuration requires the destination public anonymous key');
+}
+
+// Redeploying the same commit with changed environment values is still a new
+// build. Give it a separate asset cache so a busy tab keeps its original chunks.
+const buildSource = process.env.VERCEL_GIT_COMMIT_SHA || process.env.VITE_APP_BUILD_VERSION || 'local';
+const buildInstance = process.env.VERCEL_DEPLOYMENT_ID || `${Date.now()}`;
+const appBuildVersion = `${buildSource.slice(0, 96)}-${buildInstance.slice(0, 64)}`.replace(/[^A-Za-z0-9_-]/g, '_');
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
+export default defineConfig(() => ({
+  define: {
+    __APP_BUILD_VERSION__: JSON.stringify(appBuildVersion),
+    'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(publicBackend.url),
+    'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(publicBackend.anonKey),
+  },
   server: {
     host: "::",
     port: 8080,
   },
   plugins: [
     react(),
-    // Only include component tagger in development mode if available
-    ...(mode === 'development' ? (() => {
-      try {
-        const { componentTagger } = require("lovable-tagger");
-        return [componentTagger()];
-      } catch {
-        return [];
+    VitePWA({
+      registerType: 'autoUpdate',
+      includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon-192x192.png', 'icon-512x512.png'],
+      manifest: {
+        name: 'TallyStore - Social Media Accounts & Crypto Trading',
+        short_name: 'TallyStore',
+        description: 'Premium social media accounts and cryptocurrency trading platform',
+        theme_color: '#8b5cf6',
+        background_color: '#ffffff',
+        display: 'standalone',
+        orientation: 'portrait-primary',
+        scope: '/',
+        start_url: '/',
+        icons: [
+          {
+            src: '/icon-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/icon-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'any'
+          },
+          {
+            src: '/icon-maskable-192x192.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable'
+          },
+          {
+            src: '/icon-maskable-512x512.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
+          }
+        ],
+        categories: ['shopping', 'finance', 'social']
+      },
+      workbox: {
+        skipWaiting: true,
+        clientsClaim: true,
+        // Keep assets available to an older tab while its page update waits for
+        // checkout or unsaved work. sw-assets.js bounds retained build caches.
+        cacheId: `tallystore-${appBuildVersion}`,
+        cleanupOutdatedCaches: false,
+        importScripts: ['/sw-assets.js'],
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,webp}'],
+        runtimeCaching: [
+          {
+            urlPattern: /^https:\/\/fonts\.googleapis\.com\/.*/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'google-fonts-cache',
+              expiration: {
+                maxEntries: 10,
+                maxAgeSeconds: 60 * 60 * 24 * 365 // 1 year
+              },
+              cacheableResponse: {
+                statuses: [0, 200]
+              }
+            }
+          },
+          {
+            urlPattern: /^https:\/\/.*\.supabase\.co\/.*/i,
+            handler: 'NetworkOnly',
+          }
+        ]
+      },
+      devOptions: {
+        enabled: true
       }
-    })() : [])
+    })
   ],
   resolve: {
     alias: {

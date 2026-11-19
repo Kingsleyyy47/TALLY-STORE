@@ -1,193 +1,116 @@
-// Direct Ercas Pay API implementation (no SDK dependencies)
-
-const ERCASPAY_BASE_URL = 'https://api.ercaspay.com/api/v1';
-const ERCASPAY_SECRET_KEY = import.meta.env.VITE_ERCASPAY_SECRET_KEY;
+import { supabase } from '@/lib/supabase'
 
 export interface PaymentData {
-  amount: number;
-  customerName: string;
-  customerEmail: string;
-  customerPhoneNumber?: string;
-  description?: string;
-  redirectUrl?: string;
-  metadata?: Record<string, any>;
+  amount: number
+  customerName: string
+  customerEmail: string
+  customerPhoneNumber?: string
+  description?: string
+  redirectUrl?: string
+  metadata?: Record<string, any>
+  revenue_context?: Record<string, unknown>
 }
 
 export interface PaymentResponse {
-  success: boolean;
-  message: string;
+  success: boolean
+  message: string
   data?: {
-    paymentReference: string;
-    transactionReference: string;
-    checkoutUrl: string;
-  };
-  error?: string;
+    paymentReference: string
+    transactionReference: string
+    checkoutUrl: string
+  }
+  error?: string
 }
 
 export interface TransactionVerification {
-  success: boolean;
-  status: string;
-  amount: number;
-  customerEmail: string;
-  paidAt?: string;
-  transactionReference: string;
-  error?: string;
+  success: boolean
+  status: string
+  amount: number
+  customerEmail: string
+  paidAt?: string
+  transactionReference: string
+  error?: string
 }
 
-/**
- * Generate a unique payment reference
- */
-export const generatePaymentReference = (): string => {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 8);
-  return `TALLY-${timestamp}-${random}`;
-};
-
-/**
- * Make HTTP request to Ercas Pay API
- */
-const makeErcasPayRequest = async (endpoint: string, data?: any) => {
-  const url = `${ERCASPAY_BASE_URL}${endpoint}`;
-  
-  const headers = {
-    'Accept': 'application/json',
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${ERCASPAY_SECRET_KEY}`
-  };
-
-  const options: RequestInit = {
-    method: data ? 'POST' : 'GET',
-    headers,
-    ...(data && { body: JSON.stringify(data) })
-  };
-
-  console.log(`🌐 Making request to: ${url}`, { method: options.method, data });
-
-  const response = await fetch(url, options);
-  
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`❌ HTTP Error ${response.status}:`, errorText);
-    throw new Error(`HTTP ${response.status}: ${errorText || response.statusText}`);
+async function getFunctionErrorMessage(error: any, fallback: string) {
+  let message = error?.message || fallback
+  const context = error?.context
+  if (context && typeof context.clone === 'function') {
+    try {
+      const body = await context.clone().json()
+      message = body?.error || body?.message || message
+    } catch {
+      try {
+        const text = await context.clone().text()
+        if (text) message = text
+      } catch {
+        // Keep the Supabase client error if the function body is unavailable.
+      }
+    }
   }
-  
-  const result = await response.json();
+  return message
+}
 
-  console.log(`📥 Response from ${url}:`, result);
-
-  return result;
-};
-
-/**
- * Initiate a payment transaction with Ercas Pay
- */
 export const initiatePayment = async (paymentData: PaymentData): Promise<PaymentResponse> => {
   try {
-    console.log('🚀 Initiating payment with Ercas Pay...', paymentData);
+    const { data, error } = await supabase.functions.invoke<PaymentResponse>('create-wallet-topup', {
+      body: paymentData,
+    })
 
-    if (!ERCASPAY_SECRET_KEY) {
-      throw new Error('Ercas Pay secret key not configured');
+    if (error) {
+      throw new Error(await getFunctionErrorMessage(error, 'Failed to initiate payment'))
     }
 
-    const transactionData = {
-      amount: paymentData.amount, // Send amount in Naira (not kobo)
-      paymentReference: generatePaymentReference(),
-      paymentMethods: 'card,bank-transfer,ussd,qrcode',
-      customerName: paymentData.customerName.replace(/[^a-zA-Z\s]/g, '').trim() || 'Customer', // Clean name - only letters and spaces
-      customerEmail: paymentData.customerEmail,
-      customerPhoneNumber: paymentData.customerPhoneNumber || '',
-      redirectUrl: paymentData.redirectUrl || `${window.location.origin}/payment-success`,
-      description: paymentData.description || 'Wallet Top-up',
-      currency: 'NGN',
-      feeBearer: 'customer',
-      metadata: {
-        source: 'tally-store-wallet-topup',
-        user_id: paymentData.metadata?.user_id, // Include user_id for webhook processing
-        ...paymentData.metadata
-      }
-    };
-
-    console.log('📤 Sending transaction data:', transactionData);
-
-    const response = await makeErcasPayRequest('/payment/initiate', transactionData);
-
-    if (!response.requestSuccessful) {
-      return {
-        success: false,
-        message: response.responseMessage || 'Failed to initiate payment',
-        error: response.responseMessage
-      };
+    if (!data) {
+      throw new Error('Payment service returned an empty response')
     }
 
-    return {
-      success: true,
-      message: 'Payment initiated successfully',
-      data: {
-        paymentReference: response.responseBody.paymentReference,
-        transactionReference: response.responseBody.transactionReference,
-        checkoutUrl: response.responseBody.checkoutUrl
-      }
-    };
-
+    return data
   } catch (error: any) {
-    console.error('❌ Payment initiation error:', error);
-    
     return {
       success: false,
       message: error.message || 'Failed to initiate payment',
-      error: error.message
-    };
+      error: error.message,
+    }
   }
-};
+}
 
-/**
- * Verify a payment transaction
- */
 export const verifyPayment = async (transactionReference: string): Promise<TransactionVerification> => {
   try {
-    console.log('🔍 Verifying transaction:', transactionReference);
+    const { data, error } = await supabase.functions.invoke<any>('verify-and-credit-wallet', {
+      body: { transaction_reference: transactionReference },
+    })
 
-    if (!ERCASPAY_SECRET_KEY) {
-      throw new Error('Ercas Pay secret key not configured');
+    if (error) {
+      throw new Error(await getFunctionErrorMessage(error, 'Verification failed'))
     }
 
-    const response = await makeErcasPayRequest(`/payment/transaction/verify/${transactionReference}`);
-
-    console.log('📥 Verification raw response:', response);
-
-    if (!response.requestSuccessful) {
-      console.log('❌ Verification failed:', response);
+    if (!data?.success) {
       return {
         success: false,
-        status: 'failed',
-        amount: 0,
+        status: data?.status || 'failed',
+        amount: data?.amount || 0,
         customerEmail: '',
         transactionReference,
-        error: response.errorMessage || response.responseMessage || 'Transaction verification failed'
-      };
+        error: data?.error || 'Transaction verification failed',
+      }
     }
-
-    const transaction = response.responseBody;
 
     return {
       success: true,
-      status: transaction.status === 'SUCCESSFUL' ? 'success' : transaction.status.toLowerCase(),
-      amount: transaction.amount, // Amount is already in Naira
-      customerEmail: transaction.customer.email,
-      paidAt: transaction.paid_at,
-      transactionReference: transaction.ercs_reference
-    };
-
+      status: 'success',
+      amount: data.amount || 0,
+      customerEmail: '',
+      transactionReference,
+    }
   } catch (error: any) {
-    console.error('❌ Payment verification error:', error);
-    
     return {
       success: false,
       status: 'error',
       amount: 0,
       customerEmail: '',
       transactionReference,
-      error: error.message || 'Verification failed'
-    };
+      error: error.message || 'Verification failed',
+    }
   }
-};
+}

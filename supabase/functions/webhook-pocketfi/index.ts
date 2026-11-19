@@ -1,0 +1,726 @@
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
+import { ngnMinorUnits } from '../_shared/ngn-amount.mjs'
+
+async function applyWalletTransaction(
+  supabaseAdmin: any,
+  params: {
+    userId: string
+    type: string
+    amount: number
+    reference?: string
+    description?: string
+    idempotencyKey?: string
+    metadata?: Record<string, unknown>
+    balanceType?: 'wallet' | 'crypto' | 'referral'
+    externalPaymentId?: string
+  },
+) {
+  const { data, error } = await supabaseAdmin.rpc('apply_wallet_transaction', {
+    p_user_id: params.userId,
+    p_type: params.type,
+    p_amount: params.amount,
+    p_reference: params.reference || null,
+    p_description: params.description || null,
+    p_idempotency_key: params.idempotencyKey || null,
+    p_metadata: params.metadata || {},
+    p_currency: 'NGN',
+    p_balance_type: params.balanceType || 'wallet',
+    p_external_payment_id: params.externalPaymentId || null,
+    p_created_by: null,
+  })
+
+  if (error) throw new Error(error.message || 'Wallet transaction failed')
+
+  const result = data as any
+  if (!result?.success) throw new Error(result?.error || 'Wallet transaction failed')
+
+  return result
+}
+
+// ── Inlined shared modules (dashboard deploy cannot resolve _shared/) ──────────
+
+// ── revenue-events.ts ──
+export const REVENUE_EVENT_TYPES = [
+  'SESSION_STARTED',
+  'PAGE_VIEWED',
+  'PRODUCT_IMPRESSION',
+  'PRODUCT_VIEWED',
+  'SEARCHED',
+  'FILTER_USED',
+  'SORT_USED',
+  'PRODUCT_CLICKED',
+  'BUY_CLICKED',
+  'PAYMENT_STARTED',
+  'PAYMENT_PROVIDER_LOADED',
+  'PAYMENT_ATTEMPTED',
+  'PAYMENT_COMPLETED',
+  'PAYMENT_FAILED',
+  'PRODUCT_PURCHASED',
+  'PRODUCT_PURCHASE_REVERSED',
+  'PRODUCT_REJECTED',
+  'SMS_ORDER_CANCELLED',
+  'SMS_ORDER_COMPLETED',
+  'SMS_ORDER_REFUNDED',
+  'RECOMMENDATION_SHOWN',
+  'RECOMMENDATION_CLICKED',
+  'RECOMMENDATION_DISMISSED',
+  'PROMOTION_SHOWN',
+  'PROMOTION_CLICKED',
+  'OFFER_SHOWN',
+  'OFFER_ACCEPTED',
+  'OFFER_DISMISSED',
+  'CHAT_OPENED',
+  'CHAT_MESSAGE',
+  'CHAT_INTENT',
+  'CHAT_PRODUCT_SHOWN',
+  'SUPPORT_HANDOFF',
+  'CHECKOUT_ABANDONED',
+  'RETURN_VISIT',
+] as const
+
+export type RevenueEventType = (typeof REVENUE_EVENT_TYPES)[number]
+
+export type RevenueRequestContext = {
+  visitor_id?: string | null
+  session_id?: string | null
+  path?: string | null
+  referrer?: string | null
+  device?: string | null
+  display_currency?: string | null
+  attribution?: Record<string, unknown> | null
+  traffic_quality?: string | null
+}
+
+const knownRevenueEventTypes = new Set<string>(REVENUE_EVENT_TYPES as readonly string[])
+
+export function isKnownRevenueEventType(eventType: string): eventType is RevenueEventType {
+  return knownRevenueEventTypes.has(eventType)
+}
+
+export function sanitizeRevenueEventType(source: string, eventType: string): RevenueEventType | null {
+  if (!isKnownRevenueEventType(eventType)) {
+    console.warn(`Unsupported revenue event type from ${source}: ${eventType}`)
+    return null
+  }
+  return eventType
+}
+
+const SENSITIVE_REVENUE_METADATA_KEY = /(^|_|\b)(password|passcode|otp|pin|token|secret|api[_-]?key|authorization|cookie|session|email|phone|account[_-]?number|accountnumber|account[_-]?name|bank[_-]?name|wallet[_-]?address|pay[_-]?address|address|memo|tag|hash|reference|payment[_-]?reference|transaction[_-]?reference|transaction[_-]?id|payment[_-]?id|purchase[_-]?id|provider[_-]?request[_-]?id|provider[_-]?response|api[_-]?response|raw[_-]?response|response[_-]?body|activation[_-]?id|external[_-]?order[_-]?id|order[_-]?id|idempotency[_-]?key|recipient|username|login|profile[_-]?url|url|link|comment|comments|group|groups)(\b|_)?/i
+
+async function sha256Hex(value: string) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+export async function sanitizeRevenueEventId(source: string, eventId: string) {
+  const normalizedSource = source.replace(/[^a-z0-9_-]+/gi, '_').slice(0, 48) || 'event'
+  const hash = await sha256Hex(`${source}:${eventId}`)
+  return `server:${normalizedSource}:${hash.slice(0, 48)}`
+}
+
+function sanitizeRevenueMetadataValue(value: unknown, depth = 0): unknown {
+  if (value == null) return value
+  if (depth > 4) return '[truncated]'
+
+  if (typeof value === 'number' || typeof value === 'boolean') return value
+
+  if (typeof value === 'string') {
+    const redacted = value
+      .replace(/https?:\/\/[^\s"'<>]+/gi, '[redacted_url]')
+      .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[redacted_email]')
+      .replace(/(?:\+?\d[\s().-]*){10,}/g, '[redacted_number]')
+      .replace(/\b(?:[a-f0-9]{32,}|[A-Za-z0-9_-]{48,})\b/g, '[redacted_token]')
+    return redacted.length > 240 ? `${redacted.slice(0, 240)}...` : redacted
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 30).map((item) => sanitizeRevenueMetadataValue(item, depth + 1))
+  }
+
+  if (typeof value === 'object') {
+    const output: Record<string, unknown> = {}
+    for (const [key, child] of Object.entries(value as Record<string, unknown>).slice(0, 80)) {
+      output[key] = SENSITIVE_REVENUE_METADATA_KEY.test(key)
+        ? '[redacted]'
+        : sanitizeRevenueMetadataValue(child, depth + 1)
+    }
+    return output
+  }
+
+  return String(value)
+}
+
+export function sanitizeRevenueMetadata(metadata: Record<string, unknown> = {}) {
+  return sanitizeRevenueMetadataValue(metadata) as Record<string, unknown>
+}
+
+function cleanRevenueContextText(value: unknown, maxLength = 240) {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed ? trimmed.slice(0, maxLength) : null
+}
+
+function cleanRevenueContextId(value: unknown) {
+  const text = cleanRevenueContextText(value, 120)
+  if (!text) return null
+  return /^[a-z0-9:_-]{8,120}$/i.test(text) ? text : null
+}
+
+function cleanRevenueContextPath(value: unknown) {
+  const text = cleanRevenueContextText(value, 240)
+  if (!text) return null
+  try {
+    const url = new URL(text, 'https://tallystore.local')
+    return url.pathname || '/'
+  } catch {
+    return text.split('?')[0].slice(0, 240) || null
+  }
+}
+
+function cleanRevenueContextReferrer(value: unknown) {
+  const text = cleanRevenueContextText(value, 240)
+  if (!text) return null
+  try {
+    const url = new URL(text)
+    return `${url.origin}${url.pathname || '/'}`.slice(0, 240)
+  } catch {
+    return null
+  }
+}
+
+export function sanitizeRevenueRequestContext(input: unknown): RevenueRequestContext {
+  const context = input && typeof input === 'object' ? input as Record<string, unknown> : {}
+  const device = cleanRevenueContextText(context.device, 40)
+  const displayCurrency = cleanRevenueContextText(context.display_currency, 12)
+  const trafficQuality = cleanRevenueContextText(context.traffic_quality, 40)
+  const attribution = context.attribution && typeof context.attribution === 'object'
+    ? sanitizeRevenueMetadata(context.attribution as Record<string, unknown>)
+    : null
+
+  return {
+    visitor_id: cleanRevenueContextId(context.visitor_id),
+    session_id: cleanRevenueContextId(context.session_id),
+    path: cleanRevenueContextPath(context.path),
+    referrer: cleanRevenueContextReferrer(context.referrer),
+    device: device && ['mobile', 'desktop', 'tablet', 'unknown'].includes(device.toLowerCase()) ? device.toLowerCase() : null,
+    display_currency: displayCurrency && /^[A-Z]{3,8}$/.test(displayCurrency) ? displayCurrency : null,
+    attribution,
+    traffic_quality: trafficQuality && /^[a-z_ -]{3,40}$/i.test(trafficQuality) ? trafficQuality.toLowerCase().replace(/\s+/g, '_') : null,
+  }
+}
+
+export function revenueContextEventColumns(context?: RevenueRequestContext | null) {
+  return {
+    visitor_id: context?.visitor_id || null,
+    session_id: context?.session_id || null,
+    path: context?.path || null,
+    referrer: context?.referrer || null,
+    device: context?.device || null,
+  }
+}
+
+export function revenueContextMetadata(context?: RevenueRequestContext | null) {
+  if (!context) return {}
+  return {
+    display_currency: context.display_currency || undefined,
+    attribution: context.attribution || undefined,
+    traffic_quality: context.traffic_quality || undefined,
+  }
+}
+
+
+// Supabase Edge Function version of the PocketFi inward-transfer webhook.
+// Runs entirely inside Supabase -- no Vercel env vars needed, since
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are auto-injected by Supabase
+// for every edge function.
+//
+// IMPORTANT WHEN DEPLOYING: in the Supabase dashboard, when you create this
+// function, there will be a "Verify JWT" / "Enforce JWT verification" toggle.
+// You MUST turn that OFF for this function. PocketFi calls this URL directly
+// with no Supabase auth token, so if JWT verification is on, every webhook
+// call gets rejected with 401 before your code even runs.
+//
+// Because JWT verification is off, a PocketFi webhook secret is required. If you
+// already stored PocketFi's secret as POCKETFI_SECRET_KEY or
+// POCKETFI_SECRET_API_KEY, this function accepts either as a fallback webhook
+// secret. Configure
+// PocketFi to send it as one of:
+//   Authorization: Bearer <secret>
+//   x-pocketfi-webhook-secret: <secret>
+//   x-webhook-secret: <secret>
+//   ?token=<secret>
+// If PocketFi supports signed payloads, x-pocketfi-signature / x-webhook-signature
+// may contain an HMAC-SHA256 hex digest of the raw request body using this secret.
+//
+// Confirmed real PocketFi webhook payload shape (from a live transfer):
+// {
+//   order: { amount, settlement_amount, fee, description },
+//   transaction: { reference },
+//   account_number,
+//   customer: { id, first_name, last_name, phone, email, businessId, ... }
+// }
+
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-pocketfi-webhook-secret, x-webhook-secret, x-pocketfi-signature, x-webhook-signature',
+}
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+  })
+}
+
+function constantTimeEquals(a: string, b: string) {
+  const encoder = new TextEncoder()
+  const left = encoder.encode(a)
+  const right = encoder.encode(b)
+  if (left.length !== right.length) return false
+
+  let diff = 0
+  for (let i = 0; i < left.length; i += 1) {
+    diff |= left[i] ^ right[i]
+  }
+  return diff === 0
+}
+
+async function hmacSha512Hex(secret: string, message: string) {
+  const encoder = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-512' },
+    false,
+    ['sign'],
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(message))
+  return Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, '0')).join('')
+}
+
+async function verifyPocketFiWebhook(req: Request, rawBody: string) {
+  const secret =
+    Deno.env.get('POCKETFI_WEBHOOK_SECRET') ||
+    Deno.env.get('POCKETFI_SECRET_KEY') ||
+    Deno.env.get('POCKETFI_SECRET_API_KEY') ||
+    ''
+  if (!secret) {
+    console.error('POCKETFI_WEBHOOK_SECRET/POCKETFI_SECRET_KEY/POCKETFI_SECRET_API_KEY is not configured. Refusing unsigned webhook.')
+    return false
+  }
+
+  const bearer = req.headers.get('Authorization')?.replace(/^Bearer\s+/i, '').trim()
+  const sharedSecret = (
+    req.headers.get('x-pocketfi-webhook-secret') ||
+    req.headers.get('x-webhook-secret') ||
+    bearer ||
+    ''
+  ).trim()
+
+  if (sharedSecret && constantTimeEquals(sharedSecret, secret)) return 'shared_secret' as const
+
+  // PocketFi sends HMAC-SHA512 in the 'HTTP_POCKETFI_SIGNATURE' header.
+  // In HTTP this arrives as 'pocketfi-signature' (lowercase, no HTTP_ prefix).
+  const signature = (
+    req.headers.get('pocketfi-signature') ||
+    req.headers.get('http_pocketfi_signature') ||
+    req.headers.get('x-pocketfi-signature') ||
+    req.headers.get('x-webhook-signature') ||
+    ''
+  ).trim().toLowerCase()
+
+  if (!signature) return false
+
+  const expectedSignature = await hmacSha512Hex(secret, rawBody)
+  return constantTimeEquals(signature, expectedSignature) ? 'hmac_sha512' as const : false
+}
+
+async function recordRevenueEvent(
+  supabaseAdmin: any,
+  input: {
+    eventType: RevenueEventType
+    eventId: string
+    userId?: string | null
+    surface?: string
+    metadata?: Record<string, unknown>
+  },
+) {
+  const eventType = sanitizeRevenueEventType('webhook-pocketfi', input.eventType)
+  if (!eventType) return
+
+  const { error } = await supabaseAdmin.from('revenue_events').upsert({
+    event_id: await sanitizeRevenueEventId('webhook-pocketfi', input.eventId),
+    event_type: eventType,
+    user_id: input.userId || null,
+    surface: input.surface || 'wallet_topup',
+    metadata: sanitizeRevenueMetadata(input.metadata || {}),
+  }, { onConflict: 'event_id', ignoreDuplicates: true })
+
+  if (error) {
+    console.error(`Failed to record PocketFi revenue event ${eventType}:`, error.message)
+  }
+}
+
+function firstDefined(...values: any[]) {
+  for (const v of values) {
+    if (v !== undefined && v !== null && v !== '') return v
+  }
+  return undefined
+}
+
+function extractAccountNumber(payload: any): string | undefined {
+  const value = firstDefined(
+    payload.account_number,
+    payload.accountNumber,
+    payload.virtualAccountNumber,
+    payload.data?.account_number,
+    payload.data?.accountNumber,
+    payload.account?.accountNumber,
+    payload.account?.number,
+  )
+  return value ? String(value) : undefined
+}
+
+function extractAmount(payload: any): unknown {
+  return firstDefined(
+    payload.order?.amount,
+    payload.order?.settlement_amount,
+    payload.data?.order?.amount,
+    payload.data?.order?.settlement_amount,
+    payload.amount,
+    payload.data?.amount,
+    payload.transaction?.amount,
+  )
+}
+
+function extractReference(payload: any): string | undefined {
+  const value = firstDefined(
+    payload.transaction?.reference,
+    payload.data?.transaction?.reference,
+    payload.reference,
+    payload.transaction_reference,
+    payload.transactionReference,
+    payload.data?.reference,
+    payload.data?.transaction_reference,
+  )
+  const reference = String(value ?? '').trim()
+  return reference || undefined
+}
+
+function extractStatus(payload: any): string {
+  return String(
+    firstDefined(payload.status, payload.data?.status, payload.event, '') || '',
+  ).toLowerCase()
+}
+
+serve(async (req) => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
+  }
+
+  if (req.method !== 'POST') {
+    return json({ error: 'Method not allowed' }, 405)
+  }
+
+  // Auto-injected by Supabase -- no manual secret setup needed.
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+    { auth: { persistSession: false } },
+  )
+
+  try {
+    const rawBody = await req.text()
+    const verified = await verifyPocketFiWebhook(req, rawBody)
+    if (!verified) {
+      return json({ error: 'Unauthorized webhook' }, 401)
+    }
+
+    const payload = rawBody ? JSON.parse(rawBody) as Record<string, any> : {}
+    const accountNumber = extractAccountNumber(payload)
+    const rawAmount = extractAmount(payload)
+    const amountMinor = ngnMinorUnits(rawAmount)
+    const amount = amountMinor === null ? Number.NaN : amountMinor / 100
+    const reference = extractReference(payload)
+    const status = extractStatus(payload)
+
+    console.log('PocketFi webhook received.')
+
+    const { data: logRow, error: logError } = await supabase
+      .from('pocketfi_webhook_logs')
+      .insert({
+        raw_payload: payload,
+        webhook_verified_at: new Date().toISOString(),
+        webhook_verification_method: verified,
+        matched_account_number: accountNumber || null,
+        verified_amount_ngn: Number.isFinite(amount) && amount > 0 ? amount : null,
+        verified_reference: reference || null,
+        verified_status: status || null,
+      })
+      .select('id')
+      .single()
+
+    if (logError || !logRow?.id) {
+      console.error('PocketFi webhook evidence could not be recorded')
+      return json({ error: 'PocketFi processing unavailable' }, 503)
+    }
+
+    if (!accountNumber || amountMinor === null || !reference) {
+      const message = !reference
+        ? 'Missing transaction reference in PocketFi webhook payload. Payment logged for manual review and not credited.'
+        : 'Missing account number or valid positive amount in PocketFi webhook payload'
+      console.error(message)
+      if (logRow) {
+        await supabase.from('pocketfi_webhook_logs').update({ error_message: message }).eq('id', logRow.id)
+      }
+      return json({ message: 'Payload could not be parsed, logged for review' })
+    }
+
+    // PocketFi's confirmed inward-transfer payload has no status field. For
+    // status-less events, require its transfer-specific order and reference.
+    const statuslessTransfer = status === '' && payload.order && payload.transaction?.reference
+    const isSuccess = Boolean(statuslessTransfer) ||
+      /^(?:success|successful|completed|paid|credit|(?:transfer|payment|collection)[._-](?:success|successful|completed|paid))$/.test(status)
+    if (!isSuccess) {
+      console.log('Ignoring non-successful PocketFi event:', status)
+      return json({ message: 'Event ignored' })
+    }
+
+    const { data: partnerCustomer, error: partnerCustomerError } = await supabase
+      .from('api_partner_customers')
+      .select('id, partner_id, customer_reference')
+      .eq('pocketfi_account_number', accountNumber)
+      .maybeSingle()
+
+    if (partnerCustomerError) {
+      const message = `Partner PocketFi lookup failed: ${partnerCustomerError.message}`
+      console.error(message)
+      if (logRow) {
+        await supabase.from('pocketfi_webhook_logs').update({ error_message: message }).eq('id', logRow.id)
+      }
+      return json({ error: 'PocketFi processing unavailable' }, 500)
+    }
+
+    if (partnerCustomer) {
+      const partnerApiUrl = `${Deno.env.get('SUPABASE_URL') ?? ''}/functions/v1/partner-api`
+      const serviceRole = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+      const partnerResponse = await fetch(partnerApiUrl, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${serviceRole}`,
+        },
+        body: JSON.stringify({
+          action: 'internal_confirm_checkout',
+          account_number: accountNumber,
+          amount,
+          transaction_reference: reference,
+          webhook_payload: payload,
+        }),
+      })
+      const partnerText = await partnerResponse.text()
+      let partnerResult: Record<string, any> | null = null
+      try {
+        partnerResult = partnerText ? JSON.parse(partnerText) : null
+      } catch {
+        partnerResult = { raw: partnerText }
+      }
+
+      if (!partnerResponse.ok) {
+        const message = partnerResult?.error || partnerResult?.message || `Partner checkout confirmation failed: ${partnerResponse.status}`
+        if (partnerResponse.status === 503 && partnerResult?.code === 'PARTNER_API_PAUSED') {
+          console.error(message)
+          if (logRow) {
+            await supabase
+              .from('pocketfi_webhook_logs')
+              .update({
+                processed: false,
+                error_message: 'Partner payment received while Partner API is paused; manual review required.',
+              })
+              .eq('id', logRow.id)
+          }
+          return json({
+            success: false,
+            message: 'Partner payment received while Partner API is paused; manual review required.',
+            code: 'PARTNER_API_PAUSED',
+          })
+        }
+        console.error(message)
+        if (logRow) {
+          await supabase.from('pocketfi_webhook_logs').update({ error_message: message }).eq('id', logRow.id)
+        }
+        return json({ error: 'PocketFi processing unavailable' }, 500)
+      }
+
+      if (logRow) {
+        await supabase
+          .from('pocketfi_webhook_logs')
+          .update({
+            processed: Boolean(partnerResult?.success),
+            error_message: partnerResult?.success ? null : partnerResult?.message || partnerResult?.error || 'Partner payment did not match a pending checkout order',
+          })
+          .eq('id', logRow.id)
+      }
+
+      return json({
+        success: Boolean(partnerResult?.success),
+        message: partnerResult?.success ? 'Partner payment processed successfully' : 'Partner payment received but needs review',
+      })
+    }
+
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('id, is_staff, is_admin')
+      .eq('pocketfi_account_number', accountNumber)
+      .maybeSingle()
+
+    if (!profile) {
+      const message = 'No user found for PocketFi account number'
+      console.error(message)
+      if (logRow) {
+        await supabase.from('pocketfi_webhook_logs').update({ error_message: message }).eq('id', logRow.id)
+      }
+      return json({ message: 'No matching account on file' })
+    }
+
+    if (profile.is_staff || profile.is_admin) {
+      const message = 'PocketFi wallet credit blocked for non-customer account'
+      console.error(message)
+      if (logRow) {
+        await supabase.from('pocketfi_webhook_logs').update({ error_message: message }).eq('id', logRow.id)
+      }
+      return json({ message: 'Account is not eligible for wallet top-up' }, 403)
+    }
+
+    const userId = profile.id
+
+    const { data: matchedLog, error: matchError } = await supabase
+      .from('pocketfi_webhook_logs')
+      .update({
+        matched_user_id: userId,
+        verified_amount_ngn: amount,
+        verified_reference: reference,
+        verified_status: status || 'success',
+      })
+      .eq('id', logRow.id)
+      .eq('processed', false)
+      .select('id')
+      .single()
+    if (matchError || !matchedLog?.id) {
+      console.error('PocketFi webhook evidence could not be linked to wallet')
+      return json({ error: 'PocketFi processing unavailable' }, 503)
+    }
+
+    const { data: existingTransaction } = await supabase
+      .from('transactions')
+      .select('id, user_id, amount')
+      .eq('reference', reference)
+      .eq('type', 'topup')
+      .maybeSingle()
+
+    if (existingTransaction) {
+      const existingAmountMinor = ngnMinorUnits(existingTransaction.amount)
+      if (existingTransaction.user_id !== userId || existingAmountMinor !== amountMinor) {
+        const message = 'PocketFi duplicate reference conflict: existing credit does not match webhook account or amount'
+        console.error(message)
+        if (logRow) {
+          await supabase
+            .from('pocketfi_webhook_logs')
+            .update({
+              processed: false,
+              matched_user_id: userId,
+              verified_amount_ngn: amount,
+              verified_reference: reference,
+              verified_status: status || 'success',
+              error_message: message,
+            })
+            .eq('id', logRow.id)
+        }
+        return json({ error: 'PocketFi payment reference conflict', code: 'POCKETFI_REFERENCE_CONFLICT' }, 409)
+      }
+
+      const existingAmount = existingAmountMinor / 100
+      console.log('PocketFi transaction already processed.')
+      if (logRow) {
+        await supabase
+          .from('pocketfi_webhook_logs')
+          .update({
+            processed: true,
+            matched_user_id: userId,
+            verified_amount_ngn: existingAmount,
+            verified_reference: reference,
+            verified_status: status || 'success',
+            error_message: 'Duplicate webhook for already credited PocketFi transaction.',
+          })
+          .eq('id', logRow.id)
+      }
+      return json({
+        success: true,
+        already_processed: true,
+        message: 'Transaction already processed',
+      })
+    }
+
+    const creditResult = await applyWalletTransaction(supabase, {
+      userId,
+      type: 'topup',
+      amount,
+      reference,
+      description: `Wallet top-up via PocketFi bank transfer (${accountNumber})`,
+      idempotencyKey: `pocketfi:${reference}`,
+      externalPaymentId: reference,
+      metadata: {
+        source: 'webhook-pocketfi',
+        provider: 'pocketfi',
+        account_number: accountNumber,
+        verified_amount_ngn: amount,
+        verified_reference: reference,
+        webhook_log_id: matchedLog.id,
+      },
+    })
+
+    const finalBalance = Number(creditResult.balance_after ?? 0)
+
+    if (logRow) {
+      await supabase
+        .from('pocketfi_webhook_logs')
+        .update({
+          processed: true,
+          matched_user_id: userId,
+          verified_amount_ngn: amount,
+          verified_reference: reference,
+          verified_status: status || 'success',
+        })
+        .eq('id', logRow.id)
+    }
+
+    console.log('PocketFi webhook payment processed successfully.')
+
+    await recordRevenueEvent(supabase, {
+      eventType: 'PAYMENT_COMPLETED',
+      eventId: `wallet_topup:PAYMENT_COMPLETED:pocketfi:${reference}`,
+      userId,
+      surface: 'wallet_topup',
+      metadata: {
+        reference,
+        provider: 'pocketfi',
+        account_number: accountNumber,
+        amount_ngn: amount,
+        balance_after: finalBalance,
+        webhook_log_id: logRow?.id || null,
+      },
+    })
+
+    return json({
+      success: true,
+      message: 'Payment processed successfully',
+    })
+  } catch (error) {
+    console.error('PocketFi webhook processing error:', error instanceof Error ? error.message : 'Unknown error')
+    return json({
+      error: 'Internal server error',
+    }, 500)
+  }
+})

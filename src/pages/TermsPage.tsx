@@ -1,19 +1,31 @@
 import { Link } from 'react-router-dom'
+import { useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { BackToHome } from "@/components/ui/back-button"
+import NavbarAuth from '@/components/NavbarAuth'
+import Footer from '@/components/Footer'
+import { trackRevenueEvent } from '@/lib/revenue-os'
 
 const TermsPage = () => {
+  useEffect(() => {
+    trackRevenueEvent({
+      eventType: 'PAGE_VIEWED',
+      surface: 'terms',
+    })
+  }, [])
+
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
-      <div className="container mx-auto px-4 max-w-4xl">
+    <div className="min-h-screen bg-background">
+      <NavbarAuth />
+      <main className="mx-auto max-w-4xl px-4 pb-16 pt-8 sm:px-6">
         {/* Header */}
         <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-4">
+          <h1 className="text-4xl font-black tracking-normal text-slate-950 dark:text-white mb-4">
             Terms of Service
           </h1>
-          <p className="text-lg text-gray-600 dark:text-gray-400">
+          <p className="text-lg text-slate-600 dark:text-slate-400">
             Last updated: January 1, 2024
           </p>
           <Badge variant="outline" className="mt-2">
@@ -121,7 +133,7 @@ const TermsPage = () => {
                 <strong>Delivery:</strong>
               </p>
               <ul>
-                <li>Accounts are delivered digitally via email or dashboard</li>
+                <li>Accounts are delivered digitally through your account and order history</li>
                 <li>Delivery typically occurs within 24 hours of payment confirmation</li>
                 <li>You are responsible for securing delivered account credentials</li>
               </ul>
@@ -255,7 +267,7 @@ const TermsPage = () => {
                 We reserve the right to modify these terms at any time. Changes will be effective immediately upon posting on our website. Your continued use of the service after changes constitutes acceptance of the new terms.
               </p>
               <p className="mt-4">
-                We will notify users of significant changes via email or dashboard notification.
+                We will notify users of significant changes via email or account notification.
               </p>
             </CardContent>
           </Card>
@@ -270,9 +282,11 @@ const TermsPage = () => {
                 If you have any questions about these Terms of Service, please contact us:
               </p>
               <div className="mt-4 space-y-2 text-blue-700 dark:text-blue-300">
-                <p>• Email: legal@tallystore.com</p>
-                <p>• Support: <Link to="/support" className="underline hover:no-underline">Visit Support Center</Link></p>
-                <p>• Business Hours: Monday - Friday, 9:00 AM - 6:00 PM EST</p>
+                <p>
+                  - <a href="/support" className="underline hover:no-underline">Support Center</a>
+                </p>
+                <p>- Support: <Link to="/support" className="underline hover:no-underline">Visit Support Center</Link></p>
+                <p>- Business Hours: Monday - Friday, 9:00 AM - 6:00 PM WAT</p>
               </div>
             </CardContent>
           </Card>
@@ -299,10 +313,11 @@ const TermsPage = () => {
           </div>
           
           <p className="text-gray-600 dark:text-gray-400 text-sm">
-            © 2024 TallyStore. All rights reserved.
+            © 2024 Tallybest Store LTD. All rights reserved.
           </p>
         </div>
-      </div>
+      </main>
+      <Footer />
     </div>
   )
 }

@@ -1,300 +1,262 @@
-import { useState } from 'react'
+import { useCallback, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { MessageCircle, Phone, Mail, Clock, CheckCircle, HelpCircle, Send } from 'lucide-react'
+import { Clock, HelpCircle, ShieldAlert, ShieldCheck, ReceiptText } from 'lucide-react'
 import NavbarAuth from '@/components/NavbarAuth'
 import Footer from '@/components/Footer'
 import WalletBalanceWidget from '@/components/WalletBalanceWidget'
+import PageBreadcrumb from '@/components/PageBreadcrumb'
+import { useSupportSettings } from '@/hooks/useSupportSettings'
+import { useAuth } from '@/contexts/SimpleAuth'
+import { trackRevenueEvent } from '@/lib/revenue-os'
+
+// WhatsApp SVG icon
+function WhatsAppIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} xmlns="http://www.w3.org/2000/svg">
+      <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413z" />
+    </svg>
+  )
+}
+
+function TelegramIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} xmlns="http://www.w3.org/2000/svg">
+      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+    </svg>
+  )
+}
+
+const faqItems = [
+  {
+    question: 'How quickly will I receive my account credentials?',
+    answer: 'Account credentials are available in your account immediately after successful payment. Open Order History and download your credentials from the completed order.'
+  },
+  {
+    question: 'What should I send when I need help?',
+    answer: 'Send your account email, order ID, payment reference, and a clear description of the issue so support can trace it quickly.'
+  },
+  {
+    question: 'What if my payment succeeded but wallet was not credited?',
+    answer: 'Use the payment recovery option from your account first. If it still does not credit, send the payment reference and receipt to support.'
+  },
+  {
+    question: 'Can I get a refund if I am not satisfied?',
+    answer: 'Refunds are reviewed case by case for genuine account or delivery issues. Contact support within 24 hours with your order details.'
+  },
+  {
+    question: 'How do I secure a purchased account?',
+    answer: 'Download the credentials from Order History, sign in, change the password, and update any recovery information included with the account.'
+  }
+]
 
 export default function SupportPage() {
-  const [formData, setFormData] = useState({
-    name: '',
-    email: '',
-    subject: '',
-    category: '',
-    message: ''
-  })
-  const [loading, setLoading] = useState(false)
-  const [submitted, setSubmitted] = useState(false)
+  const { user, accountSuspended, suspensionReason } = useAuth()
+  const support = useSupportSettings()
+  const hasWhatsApp = Boolean(support.whatsappUrl)
+  const hasTelegram = Boolean(support.telegramUrl)
+  const hasAny = hasWhatsApp || hasTelegram
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setLoading(true)
+  const primaryUrl = support.whatsappUrl || support.telegramUrl || '#'
+  const primaryLabel = hasWhatsApp ? 'Message on WhatsApp' : hasTelegram ? 'Message on Telegram' : 'Message support'
+  const primaryColor = hasWhatsApp
+    ? 'bg-white text-emerald-700 hover:bg-emerald-50'
+    : 'bg-white text-sky-700 hover:bg-sky-50'
 
-    try {
-      // Simulate form submission
-      await new Promise(resolve => setTimeout(resolve, 1500))
-      setSubmitted(true)
-    } catch (error) {
-      console.error('Failed to submit:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+  useEffect(() => {
+    trackRevenueEvent({
+      eventType: 'PAGE_VIEWED',
+      userId: user?.id || null,
+      surface: 'support',
+      metadata: {
+        has_whatsapp: hasWhatsApp,
+        has_telegram: hasTelegram,
+      },
+    })
+  }, [hasTelegram, hasWhatsApp, user?.id])
 
-  const faqItems = [
-    {
-      question: "How quickly will I receive my account credentials?",
-      answer: "Account credentials are available in your dashboard immediately after successful payment for download. Email delivery is coming soon!"
-    },
-    {
-      question: "What payment methods do you accept?",
-      answer: "We currently accept wallet top-ups via bank transfer, card payments, and mobile money. All purchases are made using your wallet balance."
-    },
-    {
-      question: "Are the accounts genuine and safe to use?",
-      answer: "Yes, all our accounts are authentic, verified, and come with full access including email credentials. We guarantee account quality."
-    },
-    {
-      question: "What if I have issues with my purchased account?",
-      answer: "We monitor email support 24/7 for any account issues. Contact us immediately via email if you experience any problems and we'll resolve them quickly."
-    },
-    {
-      question: "Can I get a refund if I'm not satisfied?",
-      answer: "Due to the digital nature of our products, refunds are evaluated case-by-case. Contact support within 24 hours if you experience genuine issues."
-    },
-    {
-      question: "How do I change the password on my purchased account?",
-      answer: "Full instructions for securing your new account are provided with your purchase. This includes changing passwords and updating recovery information."
-    }
-  ]
+  const handleSupportHandoff = useCallback((channel: 'whatsapp' | 'telegram' | 'primary') => {
+    trackRevenueEvent({
+      eventType: 'SUPPORT_HANDOFF',
+      userId: user?.id || null,
+      surface: 'support',
+      metadata: {
+        channel,
+        has_whatsapp: hasWhatsApp,
+        has_telegram: hasTelegram,
+      },
+    })
+  }, [hasTelegram, hasWhatsApp, user?.id])
 
   return (
     <div className="min-h-screen bg-background">
       <NavbarAuth />
-      
-      {/* Wallet Balance Widget */}
-      <div className="container mx-auto px-6 pt-24 pb-4 max-w-6xl">
+
+      <div className="container mx-auto max-w-6xl px-4 pb-4 pt-4 sm:px-6">
+        <PageBreadcrumb items={[{ label: 'Support' }]} className="mb-4" />
         <WalletBalanceWidget showRefresh={true} />
       </div>
-      
-      <div className="container mx-auto px-6 pb-12 max-w-6xl">
-        <div className="text-center mb-12">
-          <h1 className="text-4xl font-bold mb-4">Support Center</h1>
-          <p className="text-xl text-muted-foreground">
-            We're here to help! Get support for your account purchases and platform questions.
+
+      <main className="container mx-auto max-w-6xl overflow-x-hidden px-4 pb-12 sm:px-6">
+        <div className="mb-10 text-center">
+          <h1 className="mb-4 text-4xl font-bold">Support Center</h1>
+          <p className="mx-auto max-w-2xl text-xl text-muted-foreground">
+            {hasAny
+              ? 'Reach our support team directly via the channels below.'
+              : 'Browse the FAQ below or check your account for self-service options.'}
           </p>
+          {hasAny && (
+            <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
+              {hasWhatsApp && (
+                <a
+                  href={support.whatsappUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => handleSupportHandoff('whatsapp')}
+                  className="inline-flex items-center gap-2 rounded-full bg-emerald-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-600"
+                >
+                  <WhatsAppIcon className="h-4 w-4" />
+                  WhatsApp
+                </a>
+              )}
+              {hasTelegram && (
+                <a
+                  href={support.telegramUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => handleSupportHandoff('telegram')}
+                  className="inline-flex items-center gap-2 rounded-full bg-sky-500 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-sky-600"
+                >
+                  <TelegramIcon className="h-4 w-4" />
+                  Telegram
+                </a>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* Contact Methods */}
-        <div className="grid md:grid-cols-3 gap-6 mb-12">
-          <Card className="text-center relative">
-            <CardContent className="pt-6">
-              <MessageCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-              <h3 className="font-semibold mb-2">Telegram Support</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Join our Telegram support group for quick updates
-              </p>
-              <Button 
-                className="w-full" 
-                variant="outline"
-                onClick={() => window.open('https://t.me/Tallystoreorg', '_blank')}
-              >
-                Join Telegram
-              </Button>
-              <div className="absolute top-2 right-2">
-                <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">
-                  Active
-                </span>
-              </div>
-            </CardContent>
-          </Card>
+        {accountSuspended && (
+          <Alert className="mb-8 border-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">
+            <ShieldAlert className="h-5 w-5 text-amber-600 dark:text-amber-300" />
+            <AlertDescription className="pl-2">
+              <span className="font-semibold">Purchasing is currently paused on this account.</span>
+              <span className="block text-sm">
+                You can still use this page, review your order history, and send support your account email, order IDs, and payment references.
+                {suspensionReason ? ` Reason: ${suspensionReason}` : ''}
+              </span>
+            </AlertDescription>
+          </Alert>
+        )}
 
-          <Card className="text-center">
-            <CardContent className="pt-6">
-              <Mail className="h-12 w-12 text-primary mx-auto mb-4" />
-              <h3 className="font-semibold mb-2">Email Support</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Get detailed help via email support
-              </p>
-              <Button variant="outline" className="w-full" onClick={() => window.location.href = 'mailto:tallystoreorg@gmail.com'}>
-                tallystoreorg@gmail.com
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card className="text-center">
-            <CardContent className="pt-6">
-              <Phone className="h-12 w-12 text-green-500 mx-auto mb-4" />
-              <h3 className="font-semibold mb-2">WhatsApp Support</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Contact us on WhatsApp for immediate assistance
-              </p>
-              <Button 
-                variant="outline" 
-                className="w-full bg-green-50 border-green-200 hover:bg-green-100" 
-                onClick={() => window.open('https://wa.me/2349024595121', '_blank')}
-              >
-                +234 902 459 5121
-              </Button>
-              <div className="mt-2">
-                <span className="bg-green-100 text-green-800 text-xs px-2 py-1 rounded-full">
-                  WhatsApp Only
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="grid lg:grid-cols-2 gap-12">
-          {/* Contact Form */}
-          <div>
-            <Card>
-              <CardHeader>
-                <CardTitle>Send us a Message</CardTitle>
-                <CardDescription>
-                  Fill out the form below and we'll get back to you as soon as possible
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {submitted ? (
-                  <Alert className="border-green-200 bg-green-50 text-green-800">
-                    <CheckCircle className="h-4 w-4" />
-                    <AlertDescription>
-                      Thank you for contacting us! We've received your message and will respond within 24 hours.
-                    </AlertDescription>
-                  </Alert>
-                ) : (
-                  <form onSubmit={handleSubmit} className="space-y-4">
-                    <div className="grid md:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="name">Full Name</Label>
-                        <Input
-                          id="name"
-                          value={formData.name}
-                          onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
-                          placeholder="Your full name"
-                          required
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label htmlFor="email">Email Address</Label>
-                        <Input
-                          id="email"
-                          type="email"
-                          value={formData.email}
-                          onChange={(e) => setFormData(prev => ({ ...prev, email: e.target.value }))}
-                          placeholder="your.email@example.com"
-                          required
-                        />
-                      </div>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="category">Category</Label>
-                      <Select value={formData.category} onValueChange={(value) => setFormData(prev => ({ ...prev, category: value }))}>
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select a category" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="account-issue">Account Issue</SelectItem>
-                          <SelectItem value="payment">Payment Problem</SelectItem>
-                          <SelectItem value="technical">Technical Support</SelectItem>
-                          <SelectItem value="refund">Refund Request</SelectItem>
-                          <SelectItem value="general">General Inquiry</SelectItem>
-                          <SelectItem value="other">Other</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="subject">Subject</Label>
-                      <Input
-                        id="subject"
-                        value={formData.subject}
-                        onChange={(e) => setFormData(prev => ({ ...prev, subject: e.target.value }))}
-                        placeholder="Brief description of your issue"
-                        required
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="message">Message</Label>
-                      <Textarea
-                        id="message"
-                        value={formData.message}
-                        onChange={(e) => setFormData(prev => ({ ...prev, message: e.target.value }))}
-                        placeholder="Please describe your issue in detail..."
-                        rows={6}
-                        required
-                      />
-                    </div>
-
-                    <Button type="submit" disabled={loading} className="w-full">
-                      {loading ? (
-                        <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                          Sending...
-                        </>
-                      ) : (
-                        <>
-                          <Send className="mr-2 h-4 w-4" />
-                          Send Message
-                        </>
-                      )}
+        {hasAny && (
+          <Card className="mb-10 max-w-full overflow-hidden border-emerald-200">
+            <div className="grid min-w-0 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className={`min-w-0 p-6 text-white sm:p-8 md:p-10 ${hasWhatsApp ? 'bg-gradient-to-br from-emerald-600 via-teal-600 to-cyan-700' : 'bg-gradient-to-br from-sky-600 via-blue-600 to-indigo-700'}`}>
+                <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-white/15 sm:mb-6 sm:h-14 sm:w-14">
+                  {hasWhatsApp
+                    ? <WhatsAppIcon className="h-6 w-6 sm:h-7 sm:w-7" />
+                    : <TelegramIcon className="h-6 w-6 sm:h-7 sm:w-7" />}
+                </div>
+                <h2 className="mb-3 text-2xl font-bold leading-tight sm:text-3xl">Message support</h2>
+                <p className="mb-6 max-w-xl text-sm leading-6 text-white/85 sm:mb-8 sm:text-base">
+                  Relay all account, wallet, payment, and order problems to our support team so we can respond from one place.
+                </p>
+                <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap">
+                  <Button asChild size="lg" className={`${primaryColor} w-full min-w-0 justify-center whitespace-normal text-xs sm:w-auto sm:text-sm`}>
+                    <a href={primaryUrl} target="_blank" rel="noopener noreferrer" onClick={() => handleSupportHandoff('primary')}>
+                      {hasWhatsApp
+                        ? <WhatsAppIcon className="mr-2 h-5 w-5" />
+                        : <TelegramIcon className="mr-2 h-5 w-5" />}
+                      {primaryLabel}
+                    </a>
+                  </Button>
+                  {hasWhatsApp && hasTelegram && (
+                    <Button asChild size="lg" variant="outline" className="w-full min-w-0 justify-center whitespace-normal border-white/40 bg-white/10 text-xs text-white hover:bg-white/20 sm:w-auto sm:text-sm">
+                      <a href={support.telegramUrl} target="_blank" rel="noopener noreferrer" onClick={() => handleSupportHandoff('telegram')}>
+                        <TelegramIcon className="mr-2 h-4 w-4" />
+                        Telegram support
+                      </a>
                     </Button>
-                  </form>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+                  )}
+                </div>
+              </div>
 
-          {/* FAQ Section */}
-          <div>
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <HelpCircle className="h-5 w-5" />
-                  Frequently Asked Questions
-                </CardTitle>
-                <CardDescription>
-                  Quick answers to common questions
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {faqItems.map((item, index) => (
-                  <div key={index} className="border-l-2 border-primary/20 pl-4">
-                    <h4 className="font-semibold text-sm mb-2">{item.question}</h4>
-                    <p className="text-sm text-muted-foreground">{item.answer}</p>
+              <CardContent className="min-w-0 space-y-5 p-6 sm:p-8 md:p-10">
+                <div className="flex items-start gap-4">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+                    <ReceiptText className="h-5 w-5" />
                   </div>
-                ))}
-              </CardContent>
-            </Card>
-
-            {/* Response Time */}
-            <Card className="mt-6">
-              <CardContent className="p-6">
-                <div className="flex items-center gap-3">
-                  <Clock className="h-8 w-8 text-primary" />
-                  <div>
-                    <h3 className="font-semibold">Response Time</h3>
+                  <div className="min-w-0">
+                    <h3 className="font-semibold">Include useful details</h3>
                     <p className="text-sm text-muted-foreground">
-                      We typically respond within 2-6 hours during business hours
+                      Send your account email, order ID, payment reference, receipt, and a short issue summary.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-4">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
+                    <Clock className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-semibold">Response window</h3>
+                    <p className="text-sm text-muted-foreground">
+                      We prioritize wallet, payment, and completed-order access issues first.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-4">
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-purple-100 text-purple-700">
+                    <ShieldCheck className="h-5 w-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-semibold">Account safety</h3>
+                    <p className="text-sm text-muted-foreground">
+                      Never share your TallyStore password. Support will only ask for order and payment details.
                     </p>
                   </div>
                 </div>
               </CardContent>
-            </Card>
-          </div>
-        </div>
+            </div>
+          </Card>
+        )}
 
-        {/* Emergency Contact */}
-        <Card className="mt-12">
-          <CardContent className="p-6">
-            <Alert>
-              <AlertDescription className="text-center">
-                <strong>Urgent Account Issues?</strong> If you're experiencing critical problems with a purchased account, 
-                contact us immediately at <strong>tallystoreorg@gmail.com</strong> or WhatsApp us at <strong>+234 902 459 5121</strong> (WhatsApp only).
-              </AlertDescription>
-            </Alert>
-          </CardContent>
-        </Card>
-      </div>
+        <div className="grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
+          <Card>
+            <CardHeader>
+              <CardTitle>Before messaging</CardTitle>
+              <CardDescription>These account actions solve the most common support requests.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm text-muted-foreground">
+              <Alert>
+                <AlertDescription>
+                  If a payment was successful but delayed, run payment recovery from your account before contacting support.
+                </AlertDescription>
+              </Alert>
+              <p>For purchased accounts, go to Order History and use Download Credentials on the completed order.</p>
+              <p>For failed purchases, include the product, order ID if available, and a screenshot of the error.</p>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <HelpCircle className="h-5 w-5" />
+                Frequently Asked Questions
+              </CardTitle>
+              <CardDescription>Quick answers to common questions</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {faqItems.map((item) => (
+                <div key={item.question} className="border-l-2 border-primary/20 pl-4">
+                  <h4 className="mb-2 text-sm font-semibold">{item.question}</h4>
+                  <p className="text-sm text-muted-foreground">{item.answer}</p>
+                </div>
+              ))}
+            </CardContent>
+          </Card>
+        </div>
+      </main>
 
       <Footer />
     </div>

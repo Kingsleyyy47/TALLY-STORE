@@ -1,86 +1,566 @@
-import { useState, useEffect } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { useMemo, useState, useEffect, useRef } from 'react'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
-import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Download, Search, Filter, Package, Clock, CheckCircle, XCircle, RefreshCw, Eye, Loader2, Mail } from 'lucide-react'
+import { Alert } from '@/components/ui/alert'
+import {
+  ArrowLeft,
+  Calendar,
+  CheckCircle,
+  Clock,
+  Copy,
+  Download,
+  ExternalLink,
+  KeyRound,
+  ListFilter,
+  Loader2,
+  Package,
+  ReceiptText,
+  RefreshCw,
+  Search,
+  ShieldAlert,
+  ShoppingBag,
+  Tags,
+  XCircle,
+} from 'lucide-react'
 import NavbarAuth from '@/components/NavbarAuth'
 import Footer from '@/components/Footer'
 import WalletBalanceWidget from '@/components/WalletBalanceWidget'
+import PageBreadcrumb from '@/components/PageBreadcrumb'
 import { useAuth } from '@/contexts/SimpleAuth'
+import { isPurchasingPausedByProfile } from '@/lib/walletReviewPolicy'
+import { useCurrency } from '@/contexts/CurrencyContext'
+import { normalizeOrderCredential, normalizeOrderCredentials } from '@/lib/orderCredentials'
 import { getUserOrders } from '@/lib/supabase'
-import { sendCredentialsEmail } from '@/lib/email'
+import {
+  getAllProductGroups,
+  getCategories,
+  getAppSetting,
+  getFavoriteProductGroupIds,
+  getTopSellingProductGroupIds,
+  getUserPurchaseHistory,
+  type Category,
+  type ProductGroup,
+} from '@/lib/supabase'
 import { useToast } from '@/hooks/use-toast'
+import { RevampCard, RevampPage } from '@/components/RevampLayout'
+import ProductTemplateCard from '@/components/ProductTemplateCard'
+import { isCustomerSellableProduct } from '@/lib/productAvailability'
+import {
+  getCustomerPressureState,
+  getRevenueVisitorId,
+  loadCustomerRelationshipBoosts,
+  loadRevenueOsSettings,
+  loadRunningCroActionPlans,
+  loadRunningCroExperiments,
+  rankProductsForRevenueOs,
+  resolveCroAssignment,
+  trackRevenueEvent,
+  type RevenueOsSettings,
+} from '@/lib/revenue-os'
 
 const statusColors = {
   completed: 'default',
   processing: 'secondary', 
   failed: 'destructive',
-  pending: 'outline'
+  pending: 'outline',
+  cancelled: 'outline',
+  refunded: 'outline',
 } as const
 
 const statusIcons = {
   completed: CheckCircle,
   processing: RefreshCw,
   failed: XCircle,
-  pending: Clock
+  pending: Clock,
+  cancelled: XCircle,
+  refunded: RefreshCw,
+}
+
+const credentialFields = [
+  { keys: ['username', 'id', 'login', 'account_id'], label: 'USERNAME / ID', tone: 'text-slate-700 dark:text-slate-300' },
+  { keys: ['password', 'pass'], label: 'PASSWORD', tone: 'text-rose-500' },
+  { keys: ['email', 'mail'], label: 'EMAIL', tone: 'text-emerald-500' },
+  { keys: ['email_password', 'mail_password', 'mail_pass', 'mailpass'], label: 'MAIL PASS', tone: 'text-orange-500' },
+  { keys: ['two_fa_code', 'two_factor', 'two_factor_code', '2fa', '2fa_key'], label: '2FA KEY', tone: 'text-purple-500' },
+  { keys: ['recovery', 'recovery_email', 'backup_email'], label: 'RECOVERY', tone: 'text-sky-500' },
+  { keys: ['recovery_email_password', 'recovery_password', 'backup_email_password', 'backup_password'], label: 'RECOVERY PASS', tone: 'text-cyan-500' },
+  { keys: ['additional_info', 'notes', 'note'], label: 'NOTES', tone: 'text-slate-500 dark:text-slate-400' },
+  { keys: ['original_line'], label: 'ORIGINAL STOCK LINE', tone: 'text-slate-500 dark:text-slate-400' },
+]
+
+function isCredentialVisibleOrder(order: any) {
+  return String(order?.status || '').toLowerCase() === 'completed'
+}
+
+function getOrderAccounts(order: any) {
+  if (!isCredentialVisibleOrder(order)) return []
+
+  if (Array.isArray(order?.account_details?.accounts)) {
+    return normalizeOrderCredentials(order.account_details.accounts)
+  }
+
+  if (order?.account_details?.username || order?.account_details?.email || order?.account_details?.password) {
+    return [normalizeOrderCredential({
+      username: order.account_details.username,
+      password: order.account_details.password,
+      email: order.account_details.email,
+      email_password: order.account_details.email_password,
+      two_fa_code: order.account_details.two_fa_code,
+      additional_info: order.account_details.additional_info,
+      recovery: order.account_details.recovery,
+      recovery_email: order.account_details.recovery_email,
+      recovery_email_password: order.account_details.recovery_email_password,
+    })]
+  }
+
+  return []
+}
+
+function readCredentialValue(account: any, keys: string[]) {
+  const key = keys.find((candidate) => account?.[candidate] !== undefined && account?.[candidate] !== null && String(account[candidate]).trim() !== '')
+  return key ? String(account[key]) : ''
+}
+
+function credentialLabel(order: any, account: any, field: typeof credentialFields[number]) {
+  if (field.keys[0] !== 'username') return field.label
+  const product = getOrderProductName(order).toLowerCase()
+  const username = readCredentialValue(account, field.keys)
+  return product.includes('discord') && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(username)
+    ? 'USERNAME / LOGIN EMAIL'
+    : field.label
+}
+
+function formatCredentialDisplay(label: string, value: string) {
+  if (label !== '2FA KEY') return value
+  const compact = value.replace(/\s+/g, '')
+  if (compact.length <= 18) return compact
+  return `${compact.slice(0, 18)}........`
+}
+
+function getOrderProductName(order: any) {
+  return order?.account_details?.product_name || order?.product_groups?.name || 'Purchased account'
+}
+
+function getOrderPlatform(order: any) {
+  return order?.account_details?.category || order?.product_groups?.categories?.name || 'Social Media'
+}
+
+function getPlatformLoginUrl(platform: string, productName = '') {
+  const value = `${platform} ${productName}`.toLowerCase()
+
+  if (value.includes('facebook') || value.includes('fb ')) return 'https://www.facebook.com/login'
+  if (value.includes('instagram') || value.includes(' ig ')) return 'https://www.instagram.com/accounts/login/'
+  if (value.includes('tiktok')) return 'https://www.tiktok.com/login'
+  if (value.includes('twitter') || value.includes(' x ')) return 'https://x.com/i/flow/login'
+  if (value.includes('snapchat')) return 'https://accounts.snapchat.com/accounts/login'
+  if (value.includes('telegram')) return 'https://web.telegram.org/'
+  if (value.includes('discord')) return 'https://discord.com/login'
+  if (value.includes('google') || value.includes('gmail') || value.includes('youtube')) return 'https://accounts.google.com/'
+  if (value.includes('amazon')) return 'https://www.amazon.com/ap/signin'
+  if (value.includes('netflix')) return 'https://www.netflix.com/login'
+  if (value.includes('linkedin')) return 'https://www.linkedin.com/login'
+  if (value.includes('pinterest')) return 'https://www.pinterest.com/login/'
+
+  return 'https://www.google.com/search?q=' + encodeURIComponent(`${platform || productName} login`)
+}
+
+function buildCredentialText(order: any) {
+  const accounts = getOrderAccounts(order)
+  const lines = [
+    'TallyStore Order Credentials',
+    `Order: ${order.id}`,
+    `Product: ${getOrderProductName(order)}`,
+    `Platform: ${getOrderPlatform(order)}`,
+    `Items: ${accounts.length || order?.account_details?.quantity || 1}`,
+    '',
+  ]
+
+  accounts.forEach((account: any, index: number) => {
+    lines.push(`Account ${index + 1}`)
+    credentialFields.forEach((field) => {
+      const value = readCredentialValue(account, field.keys)
+      if (value) lines.push(`${credentialLabel(order, account, field)}: ${value}`)
+    })
+    lines.push('')
+  })
+
+  return lines.join('\n')
+}
+
+function OrderDetailsView({
+  order,
+  formatPrice,
+  formatDate,
+  onCopyAll,
+  onDownload,
+  onCopyText,
+  onOpenLogin,
+}: {
+  order: any
+  formatPrice: (amount: number) => string
+  formatDate: (value: string) => { date: string; time: string }
+  onCopyAll: (order: any) => void
+  onDownload: (order: any) => void
+  onCopyText: (text: string, label?: string) => void
+  onOpenLogin: (order: any, loginUrl: string) => void
+}) {
+  const accounts = getOrderAccounts(order)
+  const productName = getOrderProductName(order)
+  const platform = getOrderPlatform(order)
+  const loginUrl = getPlatformLoginUrl(platform, productName)
+  const itemCount = accounts.length || order?.account_details?.quantity || 1
+  const { date } = formatDate(order.created_at)
+  const canAccessCredentials = isCredentialVisibleOrder(order) && accounts.length > 0
+
+  return (
+    <div className="max-w-4xl space-y-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        <Button
+          type="button"
+          variant="outline"
+          className="h-10 min-w-0 justify-center rounded-xl border-purple-400/30 bg-purple-500/10 px-2 text-xs font-black text-purple-700 hover:bg-purple-500/15 dark:text-purple-300 sm:text-sm"
+          onClick={() => onCopyAll(order)}
+          disabled={!canAccessCredentials}
+        >
+          <Copy className="h-4 w-4 shrink-0" />
+          <span className="truncate">Copy</span>
+        </Button>
+        <Button
+          asChild
+          className="h-10 min-w-0 justify-center rounded-xl bg-amber-500 px-2 text-xs font-black text-white shadow-[0_12px_32px_rgba(245,158,11,0.24)] hover:bg-amber-400 sm:text-sm"
+        >
+          <a href={loginUrl} target="_blank" rel="noopener noreferrer" onClick={() => onOpenLogin(order, loginUrl)}>
+            <ExternalLink className="h-4 w-4 shrink-0" />
+            <span className="truncate">Login</span>
+          </a>
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="col-span-2 h-10 min-w-0 justify-center rounded-xl px-2 text-xs font-black sm:col-span-1 sm:text-sm"
+          onClick={() => onDownload(order)}
+          disabled={!canAccessCredentials}
+        >
+          <Download className="h-4 w-4 shrink-0" />
+          <span>Download</span>
+        </Button>
+      </div>
+
+      <div className="rounded-2xl border border-amber-500/40 bg-amber-500/10 p-3 text-amber-900 dark:text-amber-100 sm:p-4">
+        <div className="flex gap-3">
+          <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-500 sm:h-5 sm:w-5" />
+          <p className="text-xs font-bold leading-5 sm:text-sm sm:leading-6">
+            Please kindly use a GOOD VPN to login and add 2-step verification after purchase.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          ['Platform', platform],
+          ['Items', String(itemCount)],
+          ['Total', formatPrice(Number(order.amount || 0))],
+          ['Date', date],
+        ].map(([label, value]) => (
+          <div key={label} className="min-w-0 rounded-2xl border border-slate-200 bg-slate-100/80 p-3 dark:border-white/10 dark:bg-slate-900 sm:p-4">
+            <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{label}</p>
+            <p className="mt-1 truncate text-base font-black text-slate-950 dark:text-white sm:mt-2 sm:text-xl">{value}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-slate-100/80 p-3 dark:border-white/10 dark:bg-slate-900 sm:p-4">
+        <p className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">Product</p>
+        <p className="mt-2 text-sm font-black leading-6 text-slate-950 dark:text-white sm:text-lg sm:leading-7">
+          {productName}
+        </p>
+      </div>
+
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-lg font-black uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">
+            Credentials ({accounts.length})
+          </h3>
+          <Badge variant={statusColors[order.status as keyof typeof statusColors] || 'outline'}>
+            {order.status}
+          </Badge>
+        </div>
+
+        {!canAccessCredentials ? (
+          <Card className="rounded-2xl border-slate-200 bg-white/85 dark:border-white/10 dark:bg-white/[0.035]">
+            <CardContent className="p-6 text-center">
+              <KeyRound className="mx-auto h-10 w-10 text-muted-foreground" />
+              <p className="mt-3 font-black">{order.status === 'completed' ? 'Purchased details could not be loaded' : 'Credentials are not available yet'}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {order.status === 'processing'
+                  ? 'This order is being confirmed. Please do not place it again. Contact support with the order ID if you need help.'
+                  : order.status === 'completed'
+                    ? 'Please refresh your orders. If the details are still missing, contact support with this order ID so we can recover your purchase.'
+                    : `This order is ${order.status}. Purchased details are shown after completion.`}
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-3">
+            {accounts.map((account: any, index: number) => (
+              <div key={`${order.id}-${index}`} className="rounded-2xl border border-slate-200 bg-white/90 p-3 shadow-sm dark:border-white/10 dark:bg-slate-950 sm:p-4">
+                <div className="grid grid-cols-[1.6rem_minmax(0,1fr)] gap-2 sm:grid-cols-[2rem_minmax(0,1fr)] sm:gap-3">
+                  <div className="grid h-7 w-7 place-items-center rounded-lg bg-purple-100 text-xs font-black text-purple-700 dark:bg-purple-500/15 dark:text-purple-200">{index + 1}</div>
+                  <div className="min-w-0 space-y-1.5">
+                    {credentialFields.map((field) => {
+                      const value = readCredentialValue(account, field.keys)
+                      if (!value) return null
+                      const displayValue = formatCredentialDisplay(field.label, value)
+                      const label = credentialLabel(order, account, field)
+
+                      return (
+                        <div key={field.label} className="grid min-w-0 grid-cols-[6.5rem_minmax(0,1fr)_1.8rem] items-center gap-1.5 text-xs sm:grid-cols-[10rem_minmax(0,1fr)_2rem] sm:gap-2 sm:text-sm">
+                          <span className={`break-words text-[10px] font-black uppercase tracking-normal sm:text-[11px] sm:tracking-[0.08em] ${field.tone}`}>
+                            {label}
+                          </span>
+                          <span
+                            className="min-w-0 truncate rounded-lg bg-slate-100 px-2 py-1.5 font-mono text-xs leading-5 text-slate-800 dark:bg-white/[0.06] dark:text-slate-200 sm:text-sm"
+                            title={field.label === '2FA KEY' ? 'Use copy to get the full 2FA key' : value}
+                          >
+                            {displayValue}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => onCopyText(value, `${label} copied`)}
+                            className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-purple-600 dark:hover:bg-white/10 dark:hover:text-purple-300"
+                            aria-label={`Copy ${label}`}
+                          >
+                            <Copy className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="rounded-2xl border border-slate-200 bg-white/80 p-4 text-sm text-muted-foreground dark:border-white/10 dark:bg-white/[0.035]">
+        <div className="flex items-start gap-3">
+          <Calendar className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            Purchased on {date}. Keep these credentials private and update security details after login.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default function OrderHistoryPage() {
-  const location = useLocation()
   const { user } = useAuth()
+  // Remount on account changes so the previous customer's orders and selected
+  // credentials cannot be rendered while the next account is being checked.
+  return <OrderHistoryAccount key={user?.id || 'signed-out'} />
+}
+
+function OrderHistoryAccount() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const {
+    user,
+    showBalances,
+    accountSuspended,
+    suspensionReason,
+    walletReviewRequired,
+    walletReviewReason,
+    walletReviewedBy,
+  } = useAuth()
+  const purchasingPaused = isPurchasingPausedByProfile(accountSuspended, walletReviewRequired, walletReviewedBy)
+  const purchasingPauseReason = accountSuspended ? suspensionReason : walletReviewedBy ? walletReviewReason : null
+  const { formatPrice } = useCurrency()
   const { toast } = useToast()
   
   const [orders, setOrders] = useState<any[]>([])
   const [filteredOrders, setFilteredOrders] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [hasLoadedOrders, setHasLoadedOrders] = useState(false)
+  const [ordersError, setOrdersError] = useState<string | null>(null)
+  const [reloadToken, setReloadToken] = useState(0)
+  const hasLoadedOrdersRef = useRef(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
   const [categoryFilter, setCategoryFilter] = useState('all')
-  const [emailingSending, setEmailSending] = useState<string | null>(null)
+  const [selectedOrder, setSelectedOrder] = useState<any | null>(null)
+  const [recommendationProducts, setRecommendationProducts] = useState<ProductGroup[]>([])
+  const [recommendationCategories, setRecommendationCategories] = useState<Category[]>([])
+  const [recommendationSettings, setRecommendationSettings] = useState<RevenueOsSettings | null>(null)
+  const [recommendationExperiments, setRecommendationExperiments] = useState<any[]>([])
 
   // Check for purchase success message
   useEffect(() => {
-    if (location.state?.purchaseSuccess) {
-      toast({
-        title: "Purchase Successful! 🎉",
-        description: `Account @${location.state.accountUsername} has been added to your orders`,
+    if (user?.id) {
+      trackRevenueEvent({
+        eventType: 'PAGE_VIEWED',
+        userId: user.id,
+        surface: 'order_history',
+        metadata: {
+          purchase_success: Boolean(location.state?.purchaseSuccess),
+        },
       })
     }
-  }, [location.state, toast])
 
-  // Load real orders from Supabase
-  useEffect(() => {
-    const loadOrders = async () => {
-      if (!user) return
+    if (location.state?.purchaseSuccess) {
+      const accountCount = location.state?.accountCount || 1
+      const productName = location.state?.productGroupName || 'account'
+      const accountText = accountCount > 1 ? `${accountCount} accounts` : '1 account'
       
+      toast({
+        title: "Purchase Successful! 🎉",
+        description: `You purchased ${accountText} from ${productName}. Open the order details below to copy or download your credentials.`,
+        duration: 10000, // Show for 10 seconds instead of default 5
+      })
+    }
+  }, [location.state, toast, user?.id])
+
+  // Load owned orders independently of catalogue and recommendation requests.
+  useEffect(() => {
+    if (!user?.id) return
+    const userId = user.id
+    const controller = new AbortController()
+    let active = true
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    const loadOrders = async () => {
+      if (hasLoadedOrdersRef.current) setRefreshing(true)
+      else setLoading(true)
+      setOrdersError(null)
       try {
-        setLoading(true)
-        console.log('🔄 Loading orders for user:', user.id)
-        
-        const ordersData = await getUserOrders(user.id)
-        console.log('✅ Orders loaded:', ordersData)
-        
+        const ordersData = await Promise.race([
+          getUserOrders(userId, controller.signal),
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => {
+              controller.abort()
+              reject(new Error('Order history timed out'))
+            }, 12_000)
+          }),
+        ])
+        if (!active) return
         setOrders(ordersData)
         setFilteredOrders(ordersData)
-        setLoading(false)
-      } catch (error) {
-        console.error('Error loading orders:', error)
-        toast({
-          variant: "destructive",
-          title: "Error",
-          description: "Failed to load order history"
+        setSelectedOrder((current: any) => current ? ordersData.find((order: any) => order.id === current.id) || null : null)
+        hasLoadedOrdersRef.current = true
+        setHasLoadedOrders(true)
+        trackRevenueEvent({
+          eventType: 'PAGE_VIEWED',
+          userId,
+          surface: 'order_history_loaded',
+          metadata: {
+            order_count: ordersData.length,
+            completed_count: ordersData.filter((order: any) => order.status === 'completed').length,
+            processing_count: ordersData.filter((order: any) => order.status === 'processing').length,
+            failed_count: ordersData.filter((order: any) => order.status === 'failed').length,
+          },
         })
-        setLoading(false)
+      } catch (error) {
+        if (!active) return
+        console.error('Error loading orders:', error)
+        setOrdersError(hasLoadedOrdersRef.current
+          ? 'Could not refresh orders. Your last loaded orders are still shown; try again.'
+          : 'Could not load your orders. Please retry. No purchase history has been confirmed yet.')
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId)
+        if (active) {
+          setLoading(false)
+          setRefreshing(false)
+        }
       }
     }
 
-    loadOrders()
-  }, [user, toast])
+    void loadOrders()
+    return () => {
+      active = false
+      controller.abort()
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [user?.id, reloadToken])
+
+  // Suggestions are optional. Their latency or failure must never hide orders.
+  useEffect(() => {
+    if (!user?.id || !hasLoadedOrders) return
+    const userId = user.id
+    let active = true
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    const loadSuggestions = async () => {
+      try {
+        const optionalData = Promise.all([
+          getAllProductGroups(), getCategories(),
+          getAppSetting('sales_recommendation_automation_enabled'),
+          loadRevenueOsSettings(), loadRunningCroExperiments(),
+          loadRunningCroActionPlans(), getFavoriteProductGroupIds(),
+          getTopSellingProductGroupIds(16), getUserPurchaseHistory(userId),
+        ])
+        const [productGroupsData, categoriesData, automationSetting, revenueSettings, experiments, actionPlans, favoriteIds, topSellingIds, purchaseHistory] = await Promise.race([
+          optionalData,
+          new Promise<never>((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Suggestions timed out')), 6_000)
+          }),
+        ])
+        if (timeoutId) clearTimeout(timeoutId)
+        timeoutId = undefined
+        if (!active) return
+        const completedProductIds = new Set(orders
+          .filter((order: any) => order.status === 'completed' && order.product_group_id)
+          .map((order: any) => String(order.product_group_id)))
+        const relationshipBoosts = await Promise.race([
+          loadCustomerRelationshipBoosts(purchaseHistory.productGroupCounts, purchaseHistory.lastPurchasedAtByProductGroup),
+          new Promise<Record<string, number>>((resolve) => {
+            timeoutId = setTimeout(() => resolve({}), 3_000)
+          }),
+        ])
+        if (!active) return
+        const sellableCandidates = productGroupsData
+          .filter(isCustomerSellableProduct)
+          .filter((product) => !completedProductIds.has(product.id) || relationshipBoosts[product.id] || favoriteIds.includes(product.id) || topSellingIds.includes(product.id))
+        const assignment = resolveCroAssignment({
+          surface: 'order_history_post_purchase', settings: revenueSettings,
+          experiments, visitorId: getRevenueVisitorId(), userId,
+        })
+        const automationEnabled = automationSetting !== 'false' && revenueSettings.enabled && assignment.rankingEnabled
+        const ranked = automationEnabled
+          ? rankProductsForRevenueOs(sellableCandidates, categoriesData, {
+              surface: 'order_history_post_purchase', topSellingIds,
+              favoriteProductIds: favoriteIds, relationshipBoosts, actionPlans,
+              customer: {
+                productGroupCounts: purchaseHistory.productGroupCounts,
+                categoryCounts: purchaseHistory.categoryCounts,
+                lastPurchasedAtByProductGroup: purchaseHistory.lastPurchasedAtByProductGroup,
+                lastPurchasedAtByCategory: purchaseHistory.lastPurchasedAtByCategory,
+                lastProductGroupId: purchaseHistory.lastProductGroupId,
+              },
+              pressure: getCustomerPressureState(), settings: revenueSettings, assignment,
+            }).slice(0, 4).map((rankedProduct) => rankedProduct.product)
+          : []
+        setRecommendationCategories(categoriesData)
+        setRecommendationSettings(revenueSettings)
+        setRecommendationExperiments(experiments)
+        setRecommendationProducts(ranked)
+      } catch (error) {
+        if (!active) return
+        console.warn('Optional order recommendations unavailable:', error)
+        setRecommendationProducts([])
+      } finally {
+        if (timeoutId) clearTimeout(timeoutId)
+      }
+    }
+    void loadSuggestions()
+    return () => {
+      active = false
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [hasLoadedOrders, orders, user?.id])
 
   useEffect(() => {
     // Filter orders based on search and filters
@@ -93,11 +573,9 @@ export default function OrderHistoryPage() {
         const orderId = order.id.toLowerCase()
         
         // Search in accounts array for bulk purchases or direct username for single purchases
-        const usernameMatch = order.account_details?.accounts 
-          ? order.account_details.accounts.some((account: any) => 
-              account.username?.toLowerCase().includes(searchLower)
-            )
-          : order.account_details?.username?.toLowerCase().includes(searchLower) || false
+        const usernameMatch = getOrderAccounts(order).some((account: any) =>
+          String(account.username || account.email || '').toLowerCase().includes(searchLower)
+        )
 
         return productName.includes(searchLower) || 
                orderId.includes(searchLower) || 
@@ -110,130 +588,124 @@ export default function OrderHistoryPage() {
     }
 
     if (categoryFilter !== 'all') {
-      filtered = filtered.filter(order => order.account_details?.category === categoryFilter)
+      filtered = filtered.filter(order => getOrderPlatform(order) === categoryFilter)
     }
 
     setFilteredOrders(filtered)
   }, [orders, searchTerm, statusFilter, categoryFilter])
 
-  const handleDownload = (order: any) => {
-    // Handle both bulk purchases (accounts array) and single purchases (direct properties)
-    const accountsData = order.account_details?.accounts 
-      ? order.account_details.accounts  // Bulk purchase - array of accounts
-      : order.account_details?.username  // Single purchase - check if direct properties exist
-        ? [{  // Wrap single account in array for consistent structure
-            username: order.account_details.username,
-            password: order.account_details.password,
-            email: order.account_details.email,
-            email_password: order.account_details.email_password,
-            two_fa_code: order.account_details.two_fa_code,
-            additional_info: order.account_details.additional_info
-          }]
-        : [] // No account data found
+  useEffect(() => {
+    if (!user?.id) return
+    const timeout = window.setTimeout(() => {
+      if (!searchTerm.trim() && statusFilter === 'all' && categoryFilter === 'all') return
+      trackRevenueEvent({
+        eventType: searchTerm.trim() ? 'SEARCHED' : 'FILTER_USED',
+        userId: user.id,
+        surface: 'order_history_filters',
+        metadata: {
+          search_length: searchTerm.trim().length,
+          status_filter: statusFilter,
+          category_filter: categoryFilter,
+          result_count: filteredOrders.length,
+        },
+      })
+    }, 500)
+    return () => window.clearTimeout(timeout)
+  }, [categoryFilter, filteredOrders.length, searchTerm, statusFilter, user?.id])
 
-    // Validate we have account credentials
-    if (!accountsData || accountsData.length === 0) {
-      alert('❌ No account credentials found for this order. Please contact support.')
+  const copyText = async (text: string, label = 'Copied') => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast({ title: label })
+    } catch {
+      toast({
+        variant: 'destructive',
+        title: 'Copy failed',
+        description: 'Please select and copy the text manually.',
+      })
+    }
+  }
+
+  const handleCopyAll = (order: any) => {
+    const accountsData = getOrderAccounts(order)
+    if (!accountsData.length) {
+      toast({
+        variant: 'destructive',
+        title: 'No credentials found',
+        description: isCredentialVisibleOrder(order)
+          ? 'Please contact support for this order.'
+          : 'Credentials are only available after the order is completed.',
+      })
       return
     }
 
-    // Simplified credentials structure - only the essential account data
-    const credentials = {
-      accounts: accountsData.map((account, index) => ({
-        accountNumber: index + 1,
-        username: account.username,
-        password: account.password,
-        email: account.email,
-        email_password: account.email_password,
-        two_fa_code: account.two_fa_code,
-        additional_info: account.additional_info
-      }))
+    trackRevenueEvent({
+      eventType: 'OFFER_ACCEPTED',
+      userId: user?.id || null,
+      surface: 'order_credentials_copy_all',
+      metadata: {
+        order_id: order.id,
+        product_group_id: order.product_group_id || null,
+        account_count: accountsData.length,
+        status: order.status,
+      },
+    })
+    copyText(buildCredentialText(order), 'Credentials copied')
+  }
+
+  const handleDownload = (order: any) => {
+    const accountsData = getOrderAccounts(order)
+    if (!accountsData.length) {
+      toast({
+        variant: 'destructive',
+        title: 'No credentials found',
+        description: isCredentialVisibleOrder(order)
+          ? 'Please contact support for this order.'
+          : 'Credentials are only available after the order is completed.',
+      })
+      return
     }
 
-    const blob = new Blob([JSON.stringify(credentials, null, 2)], { type: 'application/json' })
+    trackRevenueEvent({
+      eventType: 'OFFER_ACCEPTED',
+      userId: user?.id || null,
+      surface: 'order_credentials_download',
+      metadata: {
+        order_id: order.id,
+        product_group_id: order.product_group_id || null,
+        account_count: accountsData.length,
+        status: order.status,
+      },
+    })
+    const blob = new Blob([buildCredentialText(order)], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${order.id}-credentials.json`
+    a.download = `${order.id}-credentials.txt`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
   }
 
-  const handleEmailCredentials = async (order: any) => {
-    if (!user?.email) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "User email not found"
-      })
-      return
-    }
-
-    // Get credentials data same as download
-    const accountsData = order.account_details?.accounts 
-      ? order.account_details.accounts
-      : order.account_details?.username
-        ? [{
-            username: order.account_details.username,
-            password: order.account_details.password,
-            email: order.account_details.email,
-            email_password: order.account_details.email_password,
-            two_fa_code: order.account_details.two_fa_code,
-            additional_info: order.account_details.additional_info
-          }]
-        : []
-
-    if (!accountsData || accountsData.length === 0) {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: "No account credentials found for this order"
-      })
-      return
-    }
-
-    const credentials = {
-      accounts: accountsData.map((account, index) => ({
-        accountNumber: index + 1,
-        username: account.username,
-        password: account.password,
-        email: account.email,
-        email_password: account.email_password,
-        two_fa_code: account.two_fa_code,
-        additional_info: account.additional_info
-      }))
-    }
-
-    setEmailSending(order.id)
-
-    try {
-      const result = await sendCredentialsEmail({
-        userEmail: user.email,
-        userName: user.email.split('@')[0],
-        credentials,
-        orderId: order.id
-      })
-
-      if (result.success) {
-        toast({
-          title: "Email Sent! 📧",
-          description: `Credentials have been sent to ${user.email}`
-        })
-      } else {
-        throw new Error(result.error || 'Failed to send email')
-      }
-    } catch (error) {
-      console.error('Failed to send credentials email:', error)
-      toast({
-        variant: "destructive",
-        title: "Email Failed",
-        description: "Failed to send credentials email. Please try again or use download."
-      })
-    } finally {
-      setEmailSending(null)
-    }
+  const handleOpenLogin = (order: any, loginUrl: string) => {
+    trackRevenueEvent({
+      eventType: 'OFFER_ACCEPTED',
+      userId: user?.id || null,
+      surface: 'order_platform_login_opened',
+      metadata: {
+        order_id: order.id,
+        product_group_id: order.product_group_id || null,
+        platform: getOrderPlatform(order),
+        login_host: (() => {
+          try {
+            return new URL(loginUrl).host
+          } catch {
+            return null
+          }
+        })(),
+      },
+    })
   }
 
   const formatDate = (dateString: string) => {
@@ -254,99 +726,320 @@ export default function OrderHistoryPage() {
   }
 
   const stats = getStats()
+  const availableOrderCategories = useMemo(() => {
+    return Array.from(new Set(orders.map(getOrderPlatform).filter(Boolean))).sort((a, b) => a.localeCompare(b))
+  }, [orders])
+
+  const recommendationCategoryById = useMemo(() => {
+    return new Map(recommendationCategories.map((category) => [category.id, category]))
+  }, [recommendationCategories])
+
+  const postPurchaseAssignment = useMemo(() => resolveCroAssignment({
+    surface: 'order_history_post_purchase',
+    settings: recommendationSettings,
+    experiments: recommendationExperiments,
+    visitorId: getRevenueVisitorId(),
+    userId: user?.id || null,
+  }), [recommendationExperiments, recommendationSettings, user?.id])
+
+  useEffect(() => {
+    if (categoryFilter !== 'all' && !availableOrderCategories.includes(categoryFilter)) {
+      setCategoryFilter('all')
+    }
+  }, [availableOrderCategories, categoryFilter])
+
+  useEffect(() => {
+    if (!user?.id || recommendationProducts.length === 0) return
+    const today = new Date().toISOString().slice(0, 10)
+    const actorKey = user.id || getRevenueVisitorId() || 'anonymous'
+    recommendationProducts.forEach((product, index) => {
+      trackRevenueEvent({
+        eventType: 'RECOMMENDATION_SHOWN',
+        userId: user.id,
+        productGroupId: product.id,
+        categoryId: product.category_id,
+        surface: 'order_history_post_purchase',
+        experimentId: postPurchaseAssignment.experimentId,
+        variantId: postPurchaseAssignment.variantId,
+        metadata: {
+          position: index + 1,
+          action: 'POST_PURCHASE_RECOMMENDATION',
+          assignmentMode: postPurchaseAssignment.mode,
+          completedOrderCount: orders.filter((order) => order.status === 'completed').length,
+        },
+        eventId: `RECOMMENDATION_SHOWN:${today}:${actorKey}:order_history_post_purchase:${postPurchaseAssignment.variantId || postPurchaseAssignment.mode}:${product.id}`,
+      })
+    })
+  }, [orders, postPurchaseAssignment.experimentId, postPurchaseAssignment.mode, postPurchaseAssignment.variantId, recommendationProducts, user?.id])
+
+  const handleRecommendedView = (product: ProductGroup) => {
+    trackRevenueEvent({
+      eventType: 'RECOMMENDATION_CLICKED',
+      userId: user?.id || null,
+      productGroupId: product.id,
+      categoryId: product.category_id,
+      surface: 'order_history_post_purchase',
+      experimentId: postPurchaseAssignment.experimentId,
+      variantId: postPurchaseAssignment.variantId,
+      metadata: {
+        action: 'POST_PURCHASE_RECOMMENDATION',
+        assignmentMode: postPurchaseAssignment.mode,
+      },
+    })
+    navigate(`/products?category=${encodeURIComponent(product.category_id || '')}`)
+  }
+
+  const handleRecommendedPurchase = (productGroupId: string, quantity: number) => {
+    const product = recommendationProducts.find((entry) => entry.id === productGroupId)
+    if (!product || !isCustomerSellableProduct(product)) return
+    const category = recommendationCategoryById.get(product.category_id)
+
+    trackRevenueEvent({
+      eventType: 'BUY_CLICKED',
+      userId: user?.id || null,
+      productGroupId: product.id,
+      categoryId: product.category_id,
+      surface: 'order_history_post_purchase',
+      experimentId: postPurchaseAssignment.experimentId,
+      variantId: postPurchaseAssignment.variantId,
+      metadata: {
+        action: 'POST_PURCHASE_RECOMMENDATION',
+        quantity,
+        price: product.price,
+        assignmentMode: postPurchaseAssignment.mode,
+      },
+    })
+
+    navigate('/checkout', {
+      state: {
+        productGroup: product,
+        category: category || null,
+        quantity,
+        isBulkPurchase: quantity > 1,
+        croAssignment: postPurchaseAssignment,
+      },
+    })
+  }
 
   return (
     <div className="min-h-screen bg-background">
       <NavbarAuth />
       
-      {/* Wallet Balance Widget */}
-      <div className="container mx-auto px-6 pt-24 pb-4">
+      <div className="mx-auto max-w-7xl px-4 pb-4 pt-8 sm:px-6 lg:px-8">
         <WalletBalanceWidget showRefresh={true} />
       </div>
       
-      <div className="container mx-auto px-6 pb-12">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold mb-2">Order History</h1>
-          <p className="text-muted-foreground">View and download your purchased accounts</p>
+      <RevampPage className="pt-0">
+        <PageBreadcrumb items={[{ label: 'Order History' }]} className="mb-5" />
+        <section className="rounded-2xl border border-slate-200 bg-white/85 p-4 shadow-sm dark:border-white/10 dark:bg-white/[0.035] sm:p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="mb-2 inline-flex items-center gap-2 rounded-full bg-purple-100 px-3 py-1 text-[11px] font-black uppercase text-purple-700 dark:bg-purple-500/15 dark:text-purple-200">
+                <ReceiptText className="h-3.5 w-3.5" />
+                Order History
+              </div>
+              <h1 className="text-2xl font-black tracking-normal text-slate-950 dark:text-white sm:text-3xl">
+                Purchases and credentials
+              </h1>
+              <p className="mt-1 max-w-2xl text-sm leading-6 text-slate-600 dark:text-slate-400">
+                Open completed orders to copy or download the exact account details attached to that purchase.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+              <Button type="button" variant="outline" className="rounded-xl font-black" disabled={loading || refreshing} onClick={() => setReloadToken((current) => current + 1)}>
+                <RefreshCw className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+                {refreshing ? 'Refreshing...' : 'Refresh orders'}
+              </Button>
+              {!purchasingPaused && (
+                <Button asChild className="hidden shrink-0 rounded-xl font-black sm:inline-flex">
+                  <Link to="/products"><ShoppingBag className="h-4 w-4" />Shop</Link>
+                </Button>
+              )}
+            </div>
+          </div>
+        </section>
+
+        {purchasingPaused && (
+          <Alert className="mt-4 border-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">
+            <ShieldAlert className="h-5 w-5 text-amber-600 dark:text-amber-300" />
+            <div className="ml-2">
+              <h3 className="font-semibold">Purchasing is paused on this account</h3>
+              <p className="text-sm">
+                You can still review completed orders, copy credentials, download credentials, and contact support.
+                {purchasingPauseReason ? ` Reason: ${purchasingPauseReason}` : ''}
+              </p>
+              <Button asChild variant="outline" size="sm" className="mt-3 rounded-xl bg-white/70 font-black dark:bg-white/10">
+                <Link to="/support">Contact support</Link>
+              </Button>
+            </div>
+          </Alert>
+        )}
+
+        {/* Success Alert for New Purchases */}
+        {location.state?.purchaseSuccess && (
+          <Alert className="mb-6 mt-8 border-green-500 bg-green-50 dark:bg-green-950/50">
+            <Download className="h-5 w-5 text-green-600 dark:text-green-400" />
+            <div className="ml-2">
+              <h3 className="font-semibold text-green-800 dark:text-green-200 mb-1">
+                📥 Your Credentials Are Ready!
+              </h3>
+              <p className="text-sm text-green-700 dark:text-green-300">
+                Your purchase is complete. Open your latest order below to view, copy, or download the credentials.
+              </p>
+            </div>
+          </Alert>
+        )}
+
+        {ordersError && <Alert role="alert" className="mt-4 border-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">
+          <ShieldAlert className="h-5 w-5" />
+          <div className="ml-2 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm font-semibold">{ordersError}</p>
+            <Button type="button" variant="outline" size="sm" disabled={loading || refreshing} onClick={() => setReloadToken((current) => current + 1)}>Retry orders</Button>
+          </div>
+        </Alert>}
+
+        {selectedOrder ? (
+          <section className="mt-8">
+            <div className="mb-5 flex items-center gap-3">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="rounded-full"
+                onClick={() => setSelectedOrder(null)}
+                aria-label="Back to orders"
+              >
+                <ArrowLeft className="h-5 w-5" />
+              </Button>
+              <div className="min-w-0">
+                <h2 className="text-2xl font-black tracking-normal">Order Details</h2>
+                <p className="truncate text-sm text-muted-foreground">{selectedOrder.id}</p>
+              </div>
+            </div>
+
+            <OrderDetailsView
+              order={selectedOrder}
+              formatPrice={formatPrice}
+              formatDate={formatDate}
+              onCopyAll={handleCopyAll}
+              onDownload={handleDownload}
+              onCopyText={copyText}
+              onOpenLogin={handleOpenLogin}
+            />
+          </section>
+        ) : !hasLoadedOrders && !loading ? (
+          <div className="mt-8 rounded-2xl border border-amber-300 bg-white p-8 text-center dark:border-amber-700 dark:bg-card">
+            <Package className="mx-auto h-9 w-9 text-amber-600" />
+            <h2 className="mt-3 text-lg font-bold">Order history is unavailable</h2>
+            <p className="mt-2 text-sm text-muted-foreground">Retry to verify your purchases and credentials.</p>
+            <Button type="button" className="mt-4" onClick={() => setReloadToken((current) => current + 1)}>Retry orders</Button>
+          </div>
+        ) : (
+          <>
+        {/* Stats */}
+        <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4">
+          <RevampCard className="p-3 sm:p-4">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-green-100 dark:bg-green-500/15">
+                  <CheckCircle className="h-4 w-4 text-green-600 dark:text-green-300" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs text-muted-foreground sm:text-sm">Completed</p>
+                  <p className="text-xl font-black sm:text-2xl">{stats.completed}</p>
+                </div>
+              </div>
+          </RevampCard>
+          
+          <RevampCard className="p-3 sm:p-4">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-red-100 dark:bg-red-500/15">
+                  <XCircle className="h-4 w-4 text-red-600 dark:text-red-300" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs text-muted-foreground sm:text-sm">Failed</p>
+                  <p className="text-xl font-black sm:text-2xl">{stats.failed}</p>
+                </div>
+              </div>
+          </RevampCard>
+          
+          <RevampCard className="p-3 sm:p-4">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-yellow-100 dark:bg-yellow-500/15">
+                  <RefreshCw className="h-4 w-4 text-yellow-600 dark:text-yellow-300" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs text-muted-foreground sm:text-sm">Processing</p>
+                  <p className="text-xl font-black sm:text-2xl">{stats.processing}</p>
+                </div>
+              </div>
+          </RevampCard>
+          
+          <RevampCard className="p-3 sm:p-4">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary">
+                  <Tags className="h-4 w-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-xs text-muted-foreground sm:text-sm">Total Spent</p>
+                  <p className="truncate text-xl font-black sm:text-2xl">{showBalances ? formatPrice(stats.totalSpent) : '***'}</p>
+                </div>
+              </div>
+          </RevampCard>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 bg-green-100 rounded-full flex items-center justify-center">
-                  <CheckCircle className="h-4 w-4 text-green-600" />
+        {!purchasingPaused && recommendationProducts.length > 0 && (
+          <section className="mt-4 rounded-2xl border border-slate-200 bg-white/85 p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.035] sm:p-4">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-black uppercase text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200">
+                  <ShoppingBag className="h-3.5 w-3.5" />
+                  Recommended next
                 </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Completed</p>
-                  <p className="text-2xl font-bold">{stats.completed}</p>
-                </div>
+                <h2 className="mt-2 text-lg font-black tracking-normal text-slate-950 dark:text-white sm:text-xl">
+                  Pick another product that fits your buying pattern
+                </h2>
               </div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 bg-red-100 rounded-full flex items-center justify-center">
-                  <XCircle className="h-4 w-4 text-red-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Failed</p>
-                  <p className="text-2xl font-bold">{stats.failed}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 bg-yellow-100 rounded-full flex items-center justify-center">
-                  <RefreshCw className="h-4 w-4 text-yellow-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Processing</p>
-                  <p className="text-2xl font-bold">{stats.processing}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-          
-          <Card>
-            <CardContent className="p-4">
-              <div className="flex items-center gap-3">
-                <div className="h-8 w-8 bg-primary/10 rounded-full flex items-center justify-center">
-                  <span className="text-primary font-bold">₦</span>
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Total Spent</p>
-                  <p className="text-2xl font-bold">₦{stats.totalSpent.toLocaleString()}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+              <Button asChild variant="outline" className="hidden shrink-0 rounded-xl font-black sm:inline-flex">
+                <Link to="/products">View all</Link>
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {recommendationProducts.map((product) => {
+                const category = recommendationCategoryById.get(product.category_id)
+                if (!category) return null
+                return (
+                  <ProductTemplateCard
+                    key={product.id}
+                    productGroup={product}
+                    category={category}
+                    onPurchase={handleRecommendedPurchase}
+                    onView={handleRecommendedView}
+                  />
+                )
+              })}
+            </div>
+          </section>
+        )}
 
         {/* Filters */}
-        <Card className="mb-6">
-          <CardContent className="p-6">
-            <div className="flex flex-col md:flex-row gap-4">
+        <Card className="my-4 rounded-2xl border-slate-200 bg-white/85 shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
+          <CardContent className="p-3 sm:p-4">
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_10rem_10rem]">
               <div className="flex-1">
                 <div className="relative">
-                  <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input
-                    placeholder="Search orders by product name, username, or order ID..."
+                    placeholder="Search orders..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10"
+                    className="h-11 rounded-xl pl-10"
                   />
                 </div>
               </div>
               
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="h-11 w-full rounded-xl">
+                  <ListFilter className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
                   <SelectValue placeholder="All Status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -355,19 +1048,21 @@ export default function OrderHistoryPage() {
                   <SelectItem value="processing">Processing</SelectItem>
                   <SelectItem value="failed">Failed</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="cancelled">Cancelled</SelectItem>
+                  <SelectItem value="refunded">Refunded</SelectItem>
                 </SelectContent>
               </Select>
               
               <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-                <SelectTrigger className="w-[150px]">
+                <SelectTrigger className="h-11 w-full rounded-xl">
+                  <Tags className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
                   <SelectValue placeholder="All Categories" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Categories</SelectItem>
-                  <SelectItem value="Instagram">Instagram</SelectItem>
-                  <SelectItem value="TikTok">TikTok</SelectItem>
-                  <SelectItem value="Twitter">Twitter</SelectItem>
-                  <SelectItem value="Facebook">Facebook</SelectItem>
+                  {availableOrderCategories.map((category) => (
+                    <SelectItem key={category} value={category}>{category}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -398,110 +1093,92 @@ export default function OrderHistoryPage() {
             </CardContent>
           </Card>
         ) : (
-          <div className="space-y-4">
+          <div className="grid gap-3 lg:grid-cols-2">
             {filteredOrders.map((order) => {
-              const StatusIcon = statusIcons[order.status as keyof typeof statusIcons]
+              const StatusIcon = statusIcons[order.status as keyof typeof statusIcons] || Clock
               const { date, time } = formatDate(order.created_at)
+              const productName = getOrderProductName(order)
+              const platform = getOrderPlatform(order)
+              const accounts = getOrderAccounts(order)
+              const itemCount = accounts.length || order.account_details?.quantity || 1
+              const firstAccount = accounts[0] || {}
+              const credentialPreview = String(firstAccount.username || firstAccount.email || '')
+              const previewName = credentialPreview || (isCredentialVisibleOrder(order) ? 'Credentials ready' : 'Available after completion')
               
               return (
-                <Card key={order.id}>
-                  <CardContent className="p-6">
-                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-3 mb-2">
-                          <h3 className="font-semibold text-lg">
-                            {order.account_details?.accounts 
-                              ? `${order.account_details.accounts.length} Account${order.account_details.accounts.length > 1 ? 's' : ''}`
-                              : `@${order.account_details?.username || 'Account'}`
-                            }
-                          </h3>
-                          <Badge variant={statusColors[order.status as keyof typeof statusColors]}>
-                            <StatusIcon className="mr-1 h-3 w-3" />
+                <Card key={order.id} className="overflow-hidden rounded-2xl border-slate-200 bg-white/90 shadow-sm dark:border-white/10 dark:bg-white/[0.035]">
+                  <CardContent className="p-3 sm:p-4">
+                    <div className="grid grid-cols-[2.6rem_minmax(0,1fr)] gap-3">
+                      <div className="grid h-10 w-10 place-items-center rounded-2xl bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-200">
+                        <Package className="h-5 w-5" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex min-w-0 items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-[11px] font-bold text-muted-foreground">#{order.id.slice(0, 8)} • {time}</p>
+                            <h3 className="mt-0.5 line-clamp-2 text-sm font-black leading-5 text-slate-950 dark:text-white sm:text-base">
+                              {productName}
+                            </h3>
+                          </div>
+                          <Badge variant={statusColors[order.status as keyof typeof statusColors] || 'outline'} className="shrink-0 gap-1 px-2 py-1 text-[10px]">
+                            <StatusIcon className="h-3 w-3" />
                             {order.status.charAt(0).toUpperCase() + order.status.slice(1)}
                           </Badge>
-                          <Badge variant="outline">{order.account_details?.category || 'Social Media'}</Badge>
                         </div>
-                        
-                        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm text-muted-foreground">
-                          <div>
-                            <span className="font-medium">Order ID:</span> {order.id.slice(0, 8)}...
+
+                        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                          <div className="min-w-0 rounded-xl bg-slate-100 px-3 py-2 dark:bg-white/[0.06]">
+                            <p className="text-muted-foreground">Amount</p>
+                            <p className="truncate font-black text-slate-950 dark:text-white">{formatPrice(order.amount || 0)}</p>
                           </div>
-                          <div>
-                            <span className="font-medium">Amount:</span> ₦{order.amount.toLocaleString()}
+                          <div className="min-w-0 rounded-xl bg-slate-100 px-3 py-2 dark:bg-white/[0.06]">
+                            <p className="text-muted-foreground">Date</p>
+                            <p className="truncate font-black text-slate-950 dark:text-white">{date}</p>
                           </div>
-                          <div>
-                            <span className="font-medium">Date:</span> {date}
+                          <div className="min-w-0 rounded-xl bg-slate-100 px-3 py-2 dark:bg-white/[0.06]">
+                            <p className="text-muted-foreground">Platform</p>
+                            <p className="truncate font-black text-slate-950 dark:text-white">{platform}</p>
                           </div>
-                          <div>
-                            <span className="font-medium">Time:</span> {time}
+                          <div className="min-w-0 rounded-xl bg-slate-100 px-3 py-2 dark:bg-white/[0.06]">
+                            <p className="text-muted-foreground">Items</p>
+                            <p className="truncate font-black text-slate-950 dark:text-white">{itemCount}</p>
                           </div>
                         </div>
 
-                        {order.account_details && (
-                          <div className="mt-4 p-3 bg-muted/50 rounded-lg">
-                            <h4 className="font-medium text-sm mb-2">Account Details:</h4>
-                            <div className="grid md:grid-cols-2 gap-2 text-sm">
-                              <div>
-                                <span className="text-muted-foreground">Product:</span> {order.account_details.product_name}
-                              </div>
-                              <div>
-                                <span className="text-muted-foreground">Category:</span> {order.account_details.category}
-                              </div>
-                              {order.account_details.accounts ? (
-                                // Bulk purchase - show account count and first account preview
-                                <>
-                                  <div>
-                                    <span className="text-muted-foreground">Accounts:</span> {order.account_details.accounts.length} purchased
-                                  </div>
-                                  {order.account_details.accounts[0]?.username && (
-                                    <div>
-                                      <span className="text-muted-foreground">Sample Username:</span> @{order.account_details.accounts[0].username}
-                                    </div>
-                                  )}
-                                </>
-                              ) : (
-                                // Single purchase - show individual account details
-                                <>
-                                  {order.account_details.username && (
-                                    <div>
-                                      <span className="text-muted-foreground">Username:</span> @{order.account_details.username}
-                                    </div>
-                                  )}
-                                  {order.account_details.email && (
-                                    <div>
-                                      <span className="text-muted-foreground">Email:</span> {order.account_details.email}
-                                    </div>
-                                  )}
-                                </>
-                              )}
-                            </div>
+                        <div className="mt-3 flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs dark:border-white/10 dark:bg-white/[0.035]">
+                          <div className="min-w-0">
+                            <p className="font-bold text-muted-foreground">Preview</p>
+                            <p className="truncate font-black text-slate-950 dark:text-white">
+                              {previewName}
+                            </p>
                           </div>
-                        )}
-                      </div>
-                      
-                      <div className="flex gap-2">
+                          <Badge variant="outline" className="shrink-0 text-[10px]">
+                            {itemCount} {itemCount === 1 ? 'account' : 'accounts'}
+                          </Badge>
+                        </div>
+
                         <Button
-                          variant="outline"
+                          variant="default"
                           size="sm"
-                          onClick={() => handleDownload(order)}
-                          disabled={order.status !== 'completed'}
+                          onClick={() => {
+                            trackRevenueEvent({
+                              eventType: 'PRODUCT_VIEWED',
+                              userId: user?.id || null,
+                              productGroupId: order.product_group_id || null,
+                              categoryId: order.product_groups?.category_id || null,
+                              surface: 'order_history_detail_opened',
+                              metadata: {
+                                order_id: order.id,
+                                status: order.status,
+                                has_credentials: getOrderAccounts(order).length > 0,
+                              },
+                            })
+                            setSelectedOrder(order)
+                          }}
+                          className="mt-3 h-10 w-full rounded-xl font-black"
                         >
-                          <Download className="h-4 w-4 mr-2" />
-                          Download
-                        </Button>
-                        
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleEmailCredentials(order)}
-                          disabled={order.status !== 'completed' || emailingSending === order.id}
-                        >
-                          {emailingSending === order.id ? (
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          ) : (
-                            <Mail className="h-4 w-4 mr-2" />
-                          )}
-                          {emailingSending === order.id ? 'Sending...' : 'Email'}
+                          <ReceiptText className="mr-2 h-4 w-4" />
+                          View Details
                         </Button>
                       </div>
                     </div>
@@ -511,7 +1188,9 @@ export default function OrderHistoryPage() {
             })}
           </div>
         )}
-      </div>
+          </>
+        )}
+      </RevampPage>
 
       <Footer />
     </div>

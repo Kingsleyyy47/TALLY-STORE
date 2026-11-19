@@ -1,0 +1,4 @@
+-- Retired manual SQL Editor repair script. Intentionally no-op.
+-- Its CRO policies allowed any browser client to read or update anonymous
+-- interventions (customer_id IS NULL). The ordered 20260924013000 migration
+-- removes those policies and direct browser table grants.
