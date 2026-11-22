@@ -171,9 +171,9 @@ export async function syncSmmProviders(admin: any, usdNgnRate: number) {
   // A failed supplier sync never disables its previously known products.
   let processed = 0;
   const routeRows: any[] = [], serviceRows: any[] = [];
-  const existing = await admin.from("supplier_product_routes").select(
-    "product_key,match_key",
-  ).eq("family", "smm");
+  const existing=typeof admin.rpc==='function'
+    ? await admin.rpc('get_smm_catalog_sync_keys')
+    : await admin.from('supplier_product_routes').select('product_key,match_key').eq('family','smm');
   if (existing.error) throw new Error("SUPPLIER_ROUTE_UNAVAILABLE");
   const previousKeys = new Map(
     (existing.data || []).map((row: any) => [row.match_key, row.product_key]),
@@ -245,6 +245,14 @@ export async function syncSmmProviders(admin: any, usdNgnRate: number) {
     });
     processed++;
   }
+  let servicesChanged=0,routesChanged=0;
+  if(typeof admin.rpc==='function'){
+    for(let i=0;i<routeRows.length;i+=1000){
+      const result=await admin.rpc('upsert_smm_provider_catalog_batch',{p_routes:routeRows.slice(i,i+1000),p_services:serviceRows.slice(i,i+1000)});
+      if(result.error||result.data?.success!==true)throw new Error('SUPPLIER_CATALOG_SAVE_FAILED');
+      servicesChanged+=Number(result.data.services_changed)||0;routesChanged+=Number(result.data.routes_changed)||0;
+    }
+  }else{
   for (let i = 0; i < routeRows.length; i += 250) {
     const saved = await admin.from("supplier_product_routes").upsert(
       routeRows.slice(i, i + 250),
@@ -257,7 +265,8 @@ export async function syncSmmProviders(admin: any, usdNgnRate: number) {
     );
     if (result.error) throw new Error("SUPPLIER_CATALOG_SAVE_FAILED");
   }
-  return { processed, diagnostics };
+  }
+  return { processed, diagnostics, services_changed:servicesChanged, routes_changed:routesChanged };
 }
 export async function planSmmRoutes(
   admin: any,

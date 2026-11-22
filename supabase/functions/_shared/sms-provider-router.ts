@@ -1,3 +1,4 @@
+import { smsRoutingState, rankedSmsOffers, recordSmsProviderEvent } from './sms-provider-policy.ts';
 import { providerRead, invalidateProviderRead } from "./provider-read-cache.ts";
 import { countryInfo, isoCountry } from "./provider-countries.ts";
 import { providerHttp } from "./provider-http.ts";
@@ -294,9 +295,9 @@ async function listOffers(
   if (provider === "getatext") {
     const result = await json(provider, "/prices-info");
     assertRead(result);
-    const raw = result.data?.data ?? result.data;
+    const raw = result.data?.prices ?? result.data?.data ?? result.data;
     const rows = raw?.api_name ? [raw] : values(raw);
-    return rows.map((row) => ({
+    return rows.filter(row=>row&&typeof row==="object"&&!Array.isArray(row)).map((row) => ({
       provider,
       id: String(row.api_name || ""),
       name: String(row.service_name || ""),
@@ -437,11 +438,13 @@ async function fetchSmsCatalogue(
   countryCode = "US",
 ) {
   countryInfo(countryCode);
+  const policy=await smsRoutingState(admin);
+  const enabledProviders=smsProvidersConfigured().filter(provider=>policy.controls[provider]!==false);
   const cache = caches.get(countryCode);
   if (!force && cache && cache.until > Date.now()) return cache;
   const diagnostics: Record<string, string> = {};
   const results = await Promise.allSettled(
-    smsProvidersConfigured().map(async (id) => {
+    enabledProviders.map(async (id) => {
       const offers = await listOffers(id as Provider, countryCode);
       diagnostics[id] = offers.length ? "ready" : "no_verified_offers";
       return offers;
@@ -461,7 +464,7 @@ async function fetchSmsCatalogue(
   const groups = new Map<string, SmsOffer[]>();
   results.forEach((result, i) => {
     if (result.status === "rejected") {
-      diagnostics[smsProvidersConfigured()[i]] = "unavailable";
+      diagnostics[enabledProviders[i]] = "unavailable";
       return;
     }
     for (const offer of result.value) {
@@ -469,7 +472,7 @@ async function fetchSmsCatalogue(
       groups.set(key, [...(groups.get(key) || []), offer]);
     }
   });
-  if (admin && keys.daisysim()) {
+  if (admin && keys.daisysim() && policy.controls.daisysim!==false) {
     const saved = await admin.from("supplier_product_routes").select("routes")
       .eq("family", "sms").like("product_key", `daisysim:${countryCode}:%`);
     if (saved.error) throw new Error("SMS_CATALOG_CACHE_UNAVAILABLE");
@@ -490,9 +493,8 @@ async function fetchSmsCatalogue(
     }
   }
   const products = [...groups.values()].map((offers) => {
-    offers.sort((a, b) =>
-      a.price - b.price || a.provider.localeCompare(b.provider)
-    );
+    const productCode=(countryCode==='US'?'':`c-${countryCode}~`)+(canonicalCodes.get(smsProductName(offers[0].name))||`u-${encodeURIComponent(smsProductName(offers[0].name))}`);
+    offers=rankedSmsOffers(offers,policy,productCode);
     const available = offers.filter((row) => row.count > 0);
     const primary = available[0] || offers[0];
     const name = smsProductName(primary.name);
@@ -717,6 +719,8 @@ async function buyOffer(
   );
 }
 export async function smsBuy(code: string, maxPrice: number, admin?: any, onReply?: (reply: {text:string;headers:Headers;status:number;bodyComplete:boolean})=>Promise<void>) {
+  let policy;
+  try{policy=await smsRoutingState(admin,code,true)}catch{throw new ProviderDeclined("NO_NUMBERS")}
   const countryCode = smsCountryFromCode(code);
   const catalog = await smsCatalogue(false, admin, countryCode);
   const product = catalog.products.find((row) => row.code === code);
@@ -726,7 +730,7 @@ export async function smsBuy(code: string, maxPrice: number, admin?: any, onRepl
   );
   // DaisySim's prices API is per service, so obtain its short-lived exact tier
   // only for a selected matching product, respecting its 30/min limit.
-  if (keys.daisysim() && !offers.some((row) => row.provider === "daisysim")) {
+  if (keys.daisysim() && policy.controls.daisysim!==false && !offers.some((row) => row.provider === "daisysim")) {
     try {
       const countries = await json("daisysim", "/countries");
       assertRead(countries);
@@ -767,8 +771,11 @@ export async function smsBuy(code: string, maxPrice: number, admin?: any, onRepl
     }
   }
   return tryProductFallback(
-    offers.sort((a, b) => a.price - b.price),
-    (offer) => buyOffer(offer, maxPrice, onReply),
+    rankedSmsOffers(offers,policy,code),
+    async(offer)=>{
+      try{const result=await buyOffer(offer,maxPrice,onReply);await recordSmsProviderEvent(admin,offer.provider,code,'accepted',result.activationId);return result}
+      catch(error){await recordSmsProviderEvent(admin,offer.provider,code,error instanceof ProviderDeclined?(error.code==='NO_NUMBERS'?'no_stock':'declined'):'unknown');throw error}
+    },
   );
 }
 async function fetchSmsStatus(reference: string, timeoutMs: number): Promise<SmsStatus> {
@@ -895,6 +902,11 @@ export async function smsDone(reference: string) {
 
 export async function smsCountries() { return providerRead("sms-countries",300_000,fetchSmsCountries) }
 
-export async function smsCatalogue(force=false,admin?:any,countryCode="US") { const key=`sms-catalogue:${countryCode}`; if(force)invalidateProviderRead(key); return providerRead(key,60_000,()=>fetchSmsCatalogue(true,admin,countryCode)) }
+export async function smsCatalogue(force=false,admin?:any,countryCode="US") { const state=await smsRoutingState(admin); const active=smsProvidersConfigured().filter(provider=>state.controls[provider]!==false).sort().join(','); const key=`sms-catalogue:${countryCode}:${active}`; if(force)invalidateProviderRead(key); return providerRead(key,60_000,()=>fetchSmsCatalogue(true,admin,countryCode)) }
 
-export async function smsStatus(reference:string,timeoutMs=12_000):Promise<SmsStatus> {return providerRead(`sms-status:${reference}:${timeoutMs}`,3000,()=>fetchSmsStatus(reference,timeoutMs))}
+export async function smsStatus(reference:string,timeoutMs=12_000,admin?:any):Promise<SmsStatus> {
+  const result=await providerRead(`sms-status:${reference}:${timeoutMs}`,3000,()=>fetchSmsStatus(reference,timeoutMs));
+  const provider=parseSmsReference(reference)?.provider;
+  if(provider&&result.status!=='waiting')await recordSmsProviderEvent(admin,provider,null,result.status==='ok'?'delivered':'cancelled',reference);
+  return result;
+}

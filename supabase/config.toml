@@ -39,3 +39,6 @@ verify_jwt = false
 
 [functions.korapay-webhook]
 verify_jwt = false
+
+[functions.provider-catalog-sync]
+verify_jwt = false

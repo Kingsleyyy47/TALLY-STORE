@@ -1,3 +1,4 @@
+import ProviderAccounts from '@/components/ProviderAccounts'
 import ProviderIntegrations from '@/components/ProviderIntegrations'
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from 'react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -7540,6 +7541,7 @@ export default function AdminPage() {
             </DialogContent>
           </Dialog>
 
+          <ProviderAccounts />
           {/* Stats Overview */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <Card>

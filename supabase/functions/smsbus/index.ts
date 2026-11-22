@@ -671,9 +671,9 @@ async function daisyGetNumber(
 
 type DaisyStatus = { status: 'ok'; code: string } | { status: 'waiting' } | { status: 'cancelled' }
 
-async function daisyGetStatus(apiKey: string, activationId: string, timeoutMs = 12_000): Promise<DaisyStatus> {
+async function daisyGetStatus(apiKey: string, activationId: string, timeoutMs = 12_000, admin?:SupabaseAdmin): Promise<DaisyStatus> {
   if (parseSmsReference(activationId)) {
-    try { return await smsStatus(activationId, timeoutMs) }
+    try { return await smsStatus(activationId, timeoutMs,admin) }
     catch(error) { if(error instanceof Error && error.message==='SUPPLIER_RATE_LIMITED') throw new DaisySmsError('RATE_LIMIT_EXCEEDED','SMS status checks are temporarily limited'); throw error }
   }
   const text = await daisyGet(apiKey, { action: 'getStatus', id: activationId }, timeoutMs)
@@ -1339,7 +1339,7 @@ async function reconcileOtpOrderStatus(admin: SupabaseAdmin, apiKey: string, ord
 
   let result: DaisyStatus
   try {
-    result = await daisyGetStatus(apiKey, activationId, readTimeoutMs)
+    result = await daisyGetStatus(apiKey, activationId, readTimeoutMs,admin)
   } catch (e: any) {
     if (e?.code === 'NO_ACTIVATION') return order
     throw e
@@ -1609,7 +1609,7 @@ async function reconcileSmsOrdersBounded(admin: SupabaseAdmin, apiKey: string, o
     checked++
     try {
       if (cancelOnly) {
-        const status = await daisyGetStatus(apiKey, order.provider_request_id, readTimeoutMs)
+        const status = await daisyGetStatus(apiKey, order.provider_request_id, readTimeoutMs,admin)
         if (status.status === 'cancelled') updated.set(order.id, await cancelSmsOrderAndRefund(admin, order, 'STATUS_CANCEL', 'sync_cancelled', `Refund for cancelled SMS order: ${order.reference}`))
       } else {
         updated.set(order.id, await reconcileOtpOrderStatus(admin, apiKey, order, readTimeoutMs))
@@ -2015,7 +2015,7 @@ async function handleCheckOtp(admin: SupabaseAdmin, userId: string, body: Record
 
   let result: DaisyStatus
   try {
-    result = await daisyGetStatus(key, activationId)
+    result = await daisyGetStatus(key, activationId,12000,admin)
   } catch (error: any) {
     if (error?.code === 'NO_ACTIVATION') {
       return json({ success: false, code: 'SMS_OUTCOME_REVIEW_REQUIRED', data: publicSmsOrder(order) }, 202)
@@ -2079,7 +2079,7 @@ async function handleCancelOtp(admin: SupabaseAdmin, userId: string, body: Recor
   }
   if (!order.provider_request_id) return json({ success: false, code: 'SMS_OUTCOME_REVIEW_REQUIRED', error: 'Number allocation needs review. Do not buy again; contact support with this order reference.', data: publicSmsOrder(order) }, 202)
 
-  const providerStatus = await daisyGetStatus(key, order.provider_request_id).catch(error => {
+  const providerStatus = await daisyGetStatus(key, order.provider_request_id,12000,admin).catch(error => {
     if (error instanceof DaisySmsError && error.code === 'NO_ACTIVATION') return null
     throw error
   })
@@ -2175,7 +2175,7 @@ async function handleAdminCheckSmsOrder(admin: SupabaseAdmin, userId: string, bo
   if (!key) return json({ success: true, data: { ...local, provider_state: 'unavailable', reason_code: 'SMS_PROVIDER_UNAVAILABLE' } })
   try {
     // The activation comes exclusively from the saved order, never the request.
-    const status = await daisyGetStatus(key, order.provider_request_id)
+    const status = await daisyGetStatus(key, order.provider_request_id,12000,admin)
     return json({ success: true, data: { ...local,
       provider_state: status.status === 'ok' ? 'code_received' : status.status,
       reason_code: status.status === 'cancelled' ? 'SMS_PROVIDER_CANCELLED' : status.status === 'ok' ? 'SMS_PROVIDER_CODE_RECEIVED' : 'SMS_PROVIDER_WAITING',
@@ -2209,7 +2209,7 @@ async function handleAdminCancelSmsOrder(admin: SupabaseAdmin, userId: string, b
   if (!order.provider_request_id || (Array.isArray(order.messages) && order.messages.length > 0)) {
     return json({ success: false, code: 'SMS_OUTCOME_REVIEW_REQUIRED' }, 202)
   }
-  const status = await daisyGetStatus(key, order.provider_request_id).catch(error => {
+  const status = await daisyGetStatus(key, order.provider_request_id,12000,admin).catch(error => {
     if (error instanceof DaisySmsError && error.code === 'NO_ACTIVATION') return null
     throw error
   })
@@ -2251,7 +2251,7 @@ async function handleAdminAutoCancelStale(admin: SupabaseAdmin, userId: string) 
         continue
       }
       if (!key || !order.provider_request_id) { reviewCount++; continue }
-      const status = await daisyGetStatus(key, order.provider_request_id).catch(error => {
+      const status = await daisyGetStatus(key, order.provider_request_id,12000,admin).catch(error => {
         if (error instanceof DaisySmsError && error.code === 'NO_ACTIVATION') return null
         throw error
       })
@@ -2339,7 +2339,7 @@ async function handleSweepStaleSms(admin: SupabaseAdmin) {
         await cancelSmsOrderAndRefund(admin, order, saved, 'scheduled_refund_recovery', `Refund for cancelled SMS order: ${order.reference}`)
         cancelled++; continue
       }
-      const status = await daisyGetStatus(key, order.provider_request_id, 3_000).catch(error => {
+      const status = await daisyGetStatus(key, order.provider_request_id, 3_000,admin).catch(error => {
         if (error instanceof DaisySmsError && error.code === 'NO_ACTIVATION') return null
         throw error
       })
@@ -2398,7 +2398,7 @@ async function handleDaisyWebhook(req: Request) {
   if (orderError) return new Response('Order confirmation unavailable', { status: 503 })
   if (!order || TERMINAL_STATUSES.includes(order.status)) return new Response('ok', { status: 200 })
 
-  const confirmed = await daisyGetStatus(getDaisyKey(), String(order.provider_request_id))
+  const confirmed = await daisyGetStatus(getDaisyKey(), String(order.provider_request_id),12000,admin)
   if (confirmed.status !== 'ok') return new Response('Code confirmation pending', { status: 503 })
   const code = confirmed.code
   const messages = Array.isArray(order.messages) ? order.messages : []

@@ -28,7 +28,7 @@ export async function providerHttp(
       redirect: "error",
       credentials: "omit",
       signal: controller.signal,
-      headers: { Accept: "application/json", ...init.headers },
+      headers: { Accept: "application/json", "User-Agent":"TallyStoreIntegration/1.0", ...init.headers },
     })
   );
   void pending.then((response) => {

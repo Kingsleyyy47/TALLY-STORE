@@ -1,3 +1,4 @@
+import { smsRoutingState } from './sms-provider-policy.ts';
 import { providerRead } from "./provider-read-cache.ts";
 import { createSmsBusClient, SmsBusApiError } from "./smsbus-client.ts";
 import { getNgnUsdRate } from "./exchange-rate.ts";
@@ -17,6 +18,7 @@ const enabled = () =>
 const client = () => createSmsBusClient(Deno.env.get("SMSBUS_API_KEY") || "");
 async function fetchRentalAreas(admin: any) {
   if (!enabled()) return [];
+  if((await smsRoutingState(admin)).controls.smsbus===false)return [];
   const [{ rate }, areas, setting] = await Promise.all([
     getNgnUsdRate(admin),
     client().listRentalAreas(),
@@ -92,6 +94,7 @@ export async function rentalAction(
       error: "Long-term rentals are temporarily unavailable.",
     };
   }
+  if(['rent_number','renew_rental'].includes(action)&&(await smsRoutingState(admin,undefined,true)).controls.smsbus===false)return {success:false,error:'This rental supplier is disabled.'};
   const provider = client();
   if (action === "rental_sms") {
     const order = await ownedOrder(admin, userId, body.order_id);

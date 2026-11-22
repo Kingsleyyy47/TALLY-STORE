@@ -35,7 +35,7 @@ export async function partnerRoutedSmmStatus(admin: any, reference: string) {
 }
 export async function partnerRoutedSmsStatus(admin: any, reference: string) {
   const saved = await read(admin, reference, "sms");
-  const result = await smsStatus(saved.activationId);
+  const result = await smsStatus(saved.activationId,12000,admin);
   return result.status === "ok"
     ? `STATUS_OK:${result.code}`
     : result.status === "waiting"

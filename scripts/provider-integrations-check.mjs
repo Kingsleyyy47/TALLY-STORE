@@ -1,5 +1,8 @@
 import {spawnSync} from 'node:child_process';
 const checks=[
+ ['Provider balances, delivery ranking and switches','npx',['-y','deno','test','--allow-env','--node-modules-dir=none','scripts/provider-operations-policy-test.ts']],
+ ['Provider operations SQL and scheduled sync','node',['scripts/provider-operations-pglite-test.mjs']],
+ ['Provider operations role boundaries','node',['scripts/provider-operations-auth-test.mjs']],
  ['Provider matching, fallback, caching and adapters','npx',['-y','deno','test','--allow-env','--node-modules-dir=none','scripts/provider-integrations-test.ts']],
  ['Live SMM catalogues and fresh purchase quotes','npx',['-y','deno','test','--allow-env','--node-modules-dir=none','scripts/smm-live-catalog-test.ts']],
  ['Live SMM allowlist SQL','node',['scripts/smm-live-catalog-pglite-test.mjs']],
