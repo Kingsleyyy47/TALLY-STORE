@@ -1,6 +1,8 @@
 import {spawnSync} from 'node:child_process';
 const checks=[
  ['Provider matching, fallback, caching and adapters','npx',['-y','deno','test','--allow-env','--node-modules-dir=none','scripts/provider-integrations-test.ts']],
+ ['Live SMM catalogues and fresh purchase quotes','npx',['-y','deno','test','--allow-env','--node-modules-dir=none','scripts/smm-live-catalog-test.ts']],
+ ['Live SMM allowlist SQL','node',['scripts/smm-live-catalog-pglite-test.mjs']],
  ['Kora verified wallet SQL','node',['scripts/catalog/korapay-wallet-pglite-test.mjs']],
  ['Rental dispatch and refunds SQL','node',['scripts/sms-rental-routing-pglite-test.mjs']],
  ['SMM dispatch concurrency','node',['scripts/smm-create-order-race-test.mjs']],

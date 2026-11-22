@@ -50,6 +50,10 @@ and receive no automatic cross-panel match. Quantity limits and fresh pricing
 are checked before each paid request. Supplier routes and costs stay in tables
 unavailable to browser roles. Existing catalogue visibility choices survive sync.
 
+Boosting now uses a [live catalogue joined to owner-enabled supplier IDs](social-boost-live-catalogue.md).
+Supplier reads cache for 30 seconds; purchases bypass that cache before debit.
+New imports default to disabled, and replacement supplier IDs require approval.
+
 Out-of-stock, price-cap and balance declines can advance to another verified
 matching offer. Timeout, malformed reply, transport failure or an uncertain
 paid request stops dispatch and retains the order for reconciliation. Polling

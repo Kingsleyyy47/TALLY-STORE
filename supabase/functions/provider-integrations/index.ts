@@ -10,6 +10,8 @@ import {
   smmProviderReadiness,
 } from "../_shared/smm-provider-router.ts";
 import { getNgnUsdRate } from "../_shared/exchange-rate.ts";
+import { liveSmmCatalogue, refreshSmmService, publicSmmService } from '../_shared/smm-live-catalog.ts';
+import { smmProviderCatalogue } from '../_shared/smm-provider-router.ts';
 const serve = Deno.serve;
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -47,6 +49,18 @@ serve(async (req) => {
       await probe.body?.cancel()
     }
     if(internal&&body.action==='smoke_readonly'){
+      if(body.boost_catalogue===true){
+        const catalogues=await Promise.all(configuredSmmProviders().map(async provider=>({provider,products:(await smmProviderCatalogue(provider)).length})));
+        const services=await liveSmmCatalogue(admin);
+        let fresh_quote=null;
+        if(services.length){
+          const stored=await admin.from('smm_services').select('*').eq('id',services[0].id).single();
+          if(stored.error)throw new Error('SMM_CATALOG_UNAVAILABLE');
+          fresh_quote=publicSmmService(await refreshSmmService(admin,stored.data,{fresh:true}));
+        }
+        return json({success:true,paid_calls:0,database_writes:0,cache_seconds:30,catalogues,visible_products:services.length,
+          public_projection_safe:services.every(service=>!('external_id' in service)&&!('rate_usd' in service)&&!('_live_smm_routes' in service)),fresh_quote});
+      }
       const [catalog,boosting]=await Promise.all([smsCatalogue(true,admin,'US'),smmProviderReadiness()])
       const database=await admin.from('supplier_product_routes').select('product_key').limit(0)
       const source_catalogues=smsProvidersConfigured().map(provider=>{const offers=catalog.products.flatMap(product=>product.offers.filter(offer=>offer.provider===provider));return {provider,products:offers.length,sample_names:offers.slice(0,8).map(offer=>offer.name)}})

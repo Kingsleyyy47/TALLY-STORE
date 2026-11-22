@@ -693,7 +693,7 @@ Deno.test("boost catalogue retains stable products, batches sync and refuses amb
     from: (table: string) => ({
       select: () => ({
         eq: async () => ({
-          data: [{ match_key: key, product_key: "12345" }],
+          data: [{ match_key: key, product_key: "1" }],
           error: null,
         }),
       }),
@@ -730,7 +730,7 @@ Deno.test("boost catalogue retains stable products, batches sync and refuses amb
     const exact = saved.supplier_product_routes.find((row) =>
       row.match_key === key
     );
-    equal(exact.product_key, "12345");
+    equal(exact.product_key, "1");
     equal(exact.routes.length, 2);
     const ambiguous = saved.supplier_product_routes.filter((row) =>
       row.match_key !== key

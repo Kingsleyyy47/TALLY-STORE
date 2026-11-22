@@ -1,3 +1,4 @@
+import { refreshSmmService } from './smm-live-catalog.ts'
 import { planSmmRoutes, dispatchSmmRoutes } from './smm-provider-router.ts'
 import { smsBuy } from './sms-provider-router.ts'
 import { ProviderDeclined } from './provider-contract.ts'
@@ -33,6 +34,7 @@ type SocialDeps = Transport & {
   // here because the legacy helper omits required fields for some types.
   smmOrderParams: (service: any, body: Body, qty: number) => Record<string, string | number>
   SMM_TYPES_WITH_QUANTITY: readonly string[]
+  refreshService?: typeof refreshSmmService
 }
 
 const DAISY_URL = 'https://daisysms.com/stubs/handler_api.php'
@@ -157,8 +159,9 @@ export async function preparePartnerSmsPlan(admin: Admin, partner: Partner, body
 export async function preparePartnerSocialPlan(admin: Admin, partner: Partner, body: Body, deps: SocialDeps): Promise<PartnerPurchasePlan> {
   const serviceId = text(body.item_id ?? body.service_id, 80)
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serviceId)) fail('Invalid Social Boost service')
-  const { data: service, error } = await admin.from('smm_services').select('id, external_id, name, category, has_refill, has_cancel, supplier_routing, service_type, price_ngn, rate_usd, min_quantity, max_quantity, is_active').eq('id', serviceId).eq('is_active', true).maybeSingle()
-  if (error || !service || service.is_active === false) fail('Social Boost service is unavailable')
+  const { data: storedService, error } = await admin.from('smm_services').select('id, external_id, name, category, has_refill, has_cancel, supplier_routing, service_type, price_ngn, rate_usd, min_quantity, max_quantity, is_active').eq('id', serviceId).eq('is_active', true).maybeSingle()
+  if (error || !storedService || storedService.is_active === false) fail('Social Boost service is unavailable')
+  const service=await (deps.refreshService||refreshSmmService)(admin,storedService,{fresh:true})
   const serviceType = text(service.service_type, 100)
   const required = SMM_REQUIRED[serviceType]
   if (!required) fail('Unsupported Social Boost service type')

@@ -1,3 +1,4 @@
+import { liveSmmCatalogue, refreshSmmService } from '../_shared/smm-live-catalog.ts'
 import { IStarProvider } from "../_shared/istar-provider.ts"
 import { providerRead } from "../_shared/provider-read-cache.ts"
 import { smsCatalogue as unifiedSmsCatalogue } from '../_shared/sms-provider-router.ts'
@@ -736,13 +737,7 @@ async function smmRequest(params: Record<string, string | number>) {
 
 async function socialCatalogue(admin: SupabaseAdmin, partner: any) {
   if (!hasSection(partner, 'social_boost')) return []
-  const { data, error } = await admin
-    .from('smm_services')
-    .select('id, external_id, name, category, platform, service_type, price_ngn, min_quantity, max_quantity, has_refill, has_cancel, is_active')
-    .eq('is_active', true)
-    .order('platform')
-    .order('category')
-  if (error) throw new Error(`Failed to load Social Boost services: ${error.message}`)
+  const data=await liveSmmCatalogue(admin,{internal:true});
   return (data || []).map((service: any) => ({
     type: 'social_boost',
     section: 'social_boost',
@@ -1309,8 +1304,9 @@ async function handleSocialOrder(admin: SupabaseAdmin, auth: PartnerAuth, body: 
   if (!hasSection(auth.partner, 'social_boost')) throw new Error('Social Boost is not enabled for this API key')
   const serviceId = cleanText(body.item_id || body.service_id, 80)
   if (!serviceId) throw new Error('item_id is required')
-  const { data: service, error } = await admin.from('smm_services').select('*').eq('id', serviceId).eq('is_active', true).single()
-  if (error || !service) throw new Error('Social Boost service not found')
+  const { data: storedService, error } = await admin.from('smm_services').select('*').eq('id', serviceId).eq('is_active', true).single()
+  if (error || !storedService) throw new Error('Social Boost service not found')
+    const service=await refreshSmmService(admin,storedService,{fresh:true})
   const actualQuantity = String(service.service_type) === 'Package' ? 1 : Math.round(Number(body.quantity || service.min_quantity || 1))
   if (String(service.service_type) !== 'Package') {
     if (actualQuantity < Number(service.min_quantity || 1)) throw new Error(`Minimum quantity is ${service.min_quantity}`)
@@ -1734,8 +1730,9 @@ async function resolveCheckoutSeed(admin: SupabaseAdmin, auth: PartnerAuth, body
     if (!hasSection(auth.partner, 'social_boost')) throw new Error('Social Boost is not enabled for this API key')
     const serviceId = cleanText(body.item_id || body.service_id, 80)
     if (!serviceId) throw new Error('item_id is required')
-    const { data: service, error } = await admin.from('smm_services').select('*').eq('id', serviceId).eq('is_active', true).single()
-    if (error || !service) throw new Error('Social Boost service not found')
+    const { data: storedService, error } = await admin.from('smm_services').select('*').eq('id', serviceId).eq('is_active', true).single()
+    if (error || !storedService) throw new Error('Social Boost service not found')
+    const service=await refreshSmmService(admin,storedService,{fresh:true})
     const actualQuantity = String(service.service_type) === 'Package' ? 1 : Math.round(Number(body.quantity || service.min_quantity || 1))
     if (String(service.service_type) !== 'Package') {
       if (actualQuantity < Number(service.min_quantity || 1)) throw new Error(`Minimum quantity is ${service.min_quantity}`)

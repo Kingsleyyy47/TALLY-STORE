@@ -6308,7 +6308,7 @@ export default function AdminPage() {
               <div className="md:col-span-2 xl:col-span-3">
                 <AdminControlSection
                   title="Social Boost Service Visibility"
-                  description="Hide entire platforms or individual services. Changes survive syncs."
+                  description="New imports start hidden. Enable the services you want to sell; enabled choices survive syncs and use live supplier details."
                 >
                 <div className="flex items-center justify-between gap-4 flex-wrap">
                   <div className="hidden md:block" />

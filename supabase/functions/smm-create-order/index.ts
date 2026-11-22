@@ -1,5 +1,6 @@
+import { refreshSmmService } from '../_shared/smm-live-catalog.ts'
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { planSmmRoutes, dispatchSmmRoutes } from '../_shared/smm-provider-router.ts'
+import { planSmmRoutes, dispatchSmmRoutes, fundedSmmRoutes } from '../_shared/smm-provider-router.ts'
 import { getNgnUsdRate as getProviderExchangeRate } from '../_shared/exchange-rate.ts'
 import { ProviderDeclined } from '../_shared/provider-contract.ts'
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
@@ -692,16 +693,17 @@ serve(async (req) => {
     }
 
     // Get service details
-    const { data: service, error: serviceError } = await supabaseAdmin
+    const { data: storedService, error: serviceError } = await supabaseAdmin
       .from('smm_services')
       .select('*')
       .eq('id', service_id)
       .eq('is_active', true)
       .single();
 
-    if (serviceError || !service) {
+    if (serviceError || !storedService) {
       throw new Error('Service not found or inactive');
     }
+    const service=existingOrder?storedService:await refreshSmmService(supabaseAdmin,storedService,{fresh:true});
     if (!Number.isFinite(Number(service.price_ngn)) || Number(service.price_ngn) <= 0) {
       throw new Error('Service has an invalid customer price');
     }
@@ -724,8 +726,8 @@ serve(async (req) => {
     }
 
     await assertPurchasingCustomer(supabaseAdmin, user.id, req, totalAmount);
-    const supplierRoutes = service.supplier_routing === true
-      ? await planSmmRoutes(supabaseAdmin, service, actualQuantity, totalAmount / (await getProviderExchangeRate(supabaseAdmin)).rate / (quote.package ? 1 : actualQuantity / 1000))
+    const supplierRoutes = !existingOrder && service.supplier_routing === true
+      ? await planSmmRoutes(supabaseAdmin, service, actualQuantity, totalAmount / (service._live_exchange_rate || (await getProviderExchangeRate(supabaseAdmin)).rate) / (quote.package ? 1 : actualQuantity / 1000))
       : null;
     const orderParams = buildPanelOrderParams(service, { ...normalizedFields, actualQuantity });
     // This is the exact public, credential-free paid action sent by createOrder.
@@ -842,6 +844,9 @@ serve(async (req) => {
     // Existing/review-held intents above never reach this preflight. A positive
     // panel balance alone is insufficient: it must cover this exact quote.
     try {
+      if(supplierRoutes&&Array.isArray(service._live_smm_routes)){
+        if(!await fundedSmmRoutes(supplierRoutes,actualQuantity,quote.package))throw new Error('SMM_SUPPLIER_UNAVAILABLE');
+      }else{
       const supplierBalance = await createSmmPanelClient().getBalance();
       const rawBalance = supplierBalance?.balance;
       const balanceText = typeof rawBalance === 'string' || typeof rawBalance === 'number' ? String(rawBalance) : '';
@@ -858,6 +863,7 @@ serve(async (req) => {
       const quotedCostNanos = rateMicros * BigInt(quote.package ? 1000 : actualQuantity);
       if (balanceNanos < quotedCostNanos) {
         throw new Error('SMM_SUPPLIER_UNAVAILABLE');
+      }
       }
     } catch {
       return new Response(JSON.stringify({

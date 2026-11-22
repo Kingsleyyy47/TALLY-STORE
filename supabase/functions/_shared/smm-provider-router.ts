@@ -1,4 +1,5 @@
 import { providerHttp } from "./provider-http.ts";
+import { providerRead } from "./provider-read-cache.ts";
 import {
   productMatchKey,
   ProviderDeclined,
@@ -17,6 +18,7 @@ export type SmmRoute = {
   maxRate?: number;
 };
 const BULK_OFFSET = 1_000_000_000;
+export const SMM_BULK_OFFSET = BULK_OFFSET;
 const panels = {
   lordofpanels: {
     url: "https://thelordofthepanels.com/api/v2",
@@ -43,6 +45,73 @@ function identity(service: SmmService) {
     refill: service.refill,
     cancel: service.cancel,
   });
+}
+export const smmServiceIdentity = identity;
+export function usableSmmService(value: any): value is SmmService {
+  return value && typeof value === "object" && !Array.isArray(value) &&
+    ["name", "category", "type"].every((key) =>
+      typeof value[key] === "string" && value[key].trim()
+    ) &&
+    Number.isSafeInteger(Number(value.service)) && Number(value.service) > 0 &&
+    Number(value.service) < BULK_OFFSET &&
+    Number.isSafeInteger(Number(value.min)) && Number(value.min) > 0 &&
+    Number.isSafeInteger(Number(value.max)) &&
+    Number(value.max) >= Number(value.min) && Number(value.max) <= 2147483647 &&
+    Number.isFinite(Number(value.rate)) && Number(value.rate) > 0;
+}
+export async function smmProviderCatalogue(
+  provider: SmmProvider,
+  fresh = false,
+): Promise<SmmService[]> {
+  const load = async () => {
+    await providerRead(`smm-usd:${provider}`, 300_000, async () => {
+      const balance = await call(provider, { action: "balance" });
+      if (!balance.ok || balance.data?.currency !== "USD") {
+        throw new Error("SMM_CATALOG_UNAVAILABLE");
+      }
+      return true;
+    });
+    const result = await call(provider, { action: "services" });
+    if (!result.ok || !Array.isArray(result.data)) {
+      throw new Error("SMM_CATALOG_UNAVAILABLE");
+    }
+    const rows = result.data.filter(usableSmmService);
+    const ids = rows.map((row) => Number(row.service));
+    if (new Set(ids).size !== ids.length) {
+      throw new Error("SMM_CATALOG_UNAVAILABLE");
+    }
+    return rows;
+  };
+  // A purchase bypasses both the value cache and any browsing request in flight.
+  return fresh ? load() : providerRead(`smm-catalog:${provider}`, 30_000, load);
+}
+export async function fundedSmmRoutes(
+  routes: SmmRoute[],
+  quantity: number,
+  packageOrder: boolean,
+): Promise<boolean> {
+  for (const provider of [...new Set(routes.map((route) => route.provider))]) {
+    try {
+      const result = await call(provider, { action: "balance" }),
+        text = String(result.data?.balance ?? "");
+      if (
+        !result.ok || result.data?.currency !== "USD" || text.length > 80 ||
+        !/^\d+(?:\.\d+)?$/.test(text)
+      ) continue;
+      const [whole, fraction = ""] = text.split(".");
+      const available = BigInt(whole) * 1_000_000_000n +
+        BigInt(fraction.padEnd(9, "0").slice(0, 9));
+      if (
+        routes.some((route) =>
+          route.provider === provider &&
+          available >=
+            BigInt(Number(route.rate).toFixed(6).replace(".", "")) *
+              BigInt(packageOrder ? 1000 : quantity)
+        )
+      ) return true;
+    } catch { /* Another verified equivalent supplier may have funds. */ }
+  }
+  return false;
 }
 async function call(
   provider: SmmProvider,
@@ -129,8 +198,16 @@ export async function syncSmmProviders(admin: any, usdNgnRate: number) {
       Number(a.service.rate) - Number(b.service.rate)
     );
     const primary = entries[0], service = primary.service;
+    const previousId = Number(previousKeys.get(matchKey));
+    const previousStillPresent = entries.some((row) =>
+      row.provider ===
+        (previousId >= BULK_OFFSET ? "bulkfollows" : "lordofpanels") &&
+      Number(row.service.service) ===
+        (previousId >= BULK_OFFSET ? previousId - BULK_OFFSET : previousId)
+    );
     const externalId =
-      !ambiguousKeys.has(matchKey) && previousKeys.has(matchKey)
+      !ambiguousKeys.has(matchKey) && previousKeys.has(matchKey) &&
+        previousStillPresent
         ? Number(previousKeys.get(matchKey))
         : Number(service.service) +
           (primary.provider === "bulkfollows" ? BULK_OFFSET : 0);
@@ -188,6 +265,19 @@ export async function planSmmRoutes(
   quantity: number,
   maxRate: number,
 ): Promise<SmmRoute[]> {
+  if (Array.isArray(service._live_smm_routes)) {
+    const routes = (service._live_smm_routes as SmmRoute[]).filter((route) =>
+      configuredSmmProviders().includes(route.provider) && route.rate > 0 &&
+      route.rate <= maxRate &&
+      (["Package", "Custom Comments Package"].includes(service.service_type) ||
+        (quantity >= route.min && quantity <= route.max))
+    );
+    if (!routes.length) throw new Error("SUPPLIER_ROUTE_UNAVAILABLE");
+    return routes.sort((a, b) => a.rate - b.rate).map((route) => ({
+      ...route,
+      maxRate,
+    }));
+  }
   const saved = await admin.from("supplier_product_routes").select(
     "match_key,routes,synced_at",
   ).eq("family", "smm").eq("product_key", String(service.external_id)).single();
@@ -286,7 +376,13 @@ export async function dispatchSmmRoutes(
           outcome: "accepted",
         });
       }
-      return { ...data, order, routing, attempts, supplier_rate_usd: Number(current.rate) };
+      return {
+        ...data,
+        order,
+        routing,
+        attempts,
+        supplier_rate_usd: Number(current.rate),
+      };
     }
     // Exact known no-order responses only; a generic error is ambiguous.
     const error = String(data.error || "").trim().toLowerCase();
@@ -330,25 +426,63 @@ export async function routedSmmStatus(order: any) {
 }
 
 export async function smmProviderReadiness() {
-  return Promise.all(configuredSmmProviders().map(async provider=>{
-    try {const response=await call(provider,{action:'balance'});return {provider,authenticated:response.ok&&!response.data?.error&&typeof response.data?.currency==='string',currency:response.data?.currency||null}}
-    catch{return {provider,authenticated:false,currency:null}}
-  }))
+  return Promise.all(
+    configuredSmmProviders().map(async (provider) => {
+      try {
+        const response = await call(provider, { action: "balance" });
+        return {
+          provider,
+          authenticated: response.ok && !response.data?.error &&
+            typeof response.data?.currency === "string",
+          currency: response.data?.currency || null,
+        };
+      } catch {
+        return { provider, authenticated: false, currency: null };
+      }
+    }),
+  );
 }
 
 // Panel API supports up to 100 order IDs per call. Keep supplier identities
 // separate so overlapping numeric IDs cannot mix orders from different panels.
-export async function routedSmmStatuses(orders:any[]) {
-  const groups=new Map<SmmProvider,any[]>()
-  const output:Record<string,any>={}
-  for(const order of orders){const provider=order.panel_response?.routing?.provider;if(configuredSmmProviders().includes(provider))groups.set(provider,[...(groups.get(provider)||[]),order])}
-  await Promise.all([...groups].map(async([provider,list])=>{
-    for(let i=0;i<list.length;i+=100){const batch=list.slice(i,i+100)
-      try{const response=await call(provider,batch.length===1?{action:'status',order:batch[0].external_order_id}:{action:'status',orders:batch.map(order=>order.external_order_id).join(',')})
-        if(!response.ok||!response.data)continue
-        for(const order of batch){const row=batch.length===1?response.data:response.data[String(order.external_order_id)];if(row&&!row.error&&typeof row.status==='string')output[order.id]={...row,routing:order.panel_response.routing}}
-      }catch{/* Read-only poll may retry on the next normal poll interval. */}
+export async function routedSmmStatuses(orders: any[]) {
+  const groups = new Map<SmmProvider, any[]>();
+  const output: Record<string, any> = {};
+  for (const order of orders) {
+    const provider = order.panel_response?.routing?.provider;
+    if (configuredSmmProviders().includes(provider)) {
+      groups.set(provider, [...(groups.get(provider) || []), order]);
     }
-  }))
-  return output
+  }
+  await Promise.all([...groups].map(async ([provider, list]) => {
+    for (let i = 0; i < list.length; i += 100) {
+      const batch = list.slice(i, i + 100);
+      try {
+        const response = await call(
+          provider,
+          batch.length === 1
+            ? { action: "status", order: batch[0].external_order_id }
+            : {
+              action: "status",
+              orders: batch.map((order) => order.external_order_id).join(","),
+            },
+        );
+        if (!response.ok || !response.data) continue;
+        for (const order of batch) {
+          const row = batch.length === 1
+            ? response.data
+            : response.data[String(order.external_order_id)];
+          if (row && !row.error && typeof row.status === "string") {
+            output[order.id] = {
+              ...row,
+              routing: order.panel_response.routing,
+            };
+          }
+        }
+      } catch {
+        /* Read-only poll may retry on the next normal poll interval. */
+      }
+    }
+  }));
+  return output;
 }
