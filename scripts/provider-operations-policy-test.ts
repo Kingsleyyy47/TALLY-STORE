@@ -1,5 +1,5 @@
 import {rankedSmsOffers,smsRoutingState} from '../supabase/functions/_shared/sms-provider-policy.ts';
-import {smsBuy,smsCatalogue,smsStatus} from '../supabase/functions/_shared/sms-provider-router.ts';
+import {smsBuy,smsCatalogue,smsStatus,smsProvidersConfigured} from '../supabase/functions/_shared/sms-provider-router.ts';
 import {providerBalances,parseAccountBalances} from '../supabase/functions/_shared/provider-balances.ts';
 import {invalidateProviderRead} from '../supabase/functions/_shared/provider-read-cache.ts';
 const assert=(value:unknown,message='Assertion failed')=>{if(!value)throw new Error(message)};
@@ -75,5 +75,19 @@ Deno.test('provider balances preserve zero and native currencies, cache reads, a
 Deno.test('provider access errors show unavailable balances instead of invented zero balances',async()=>{
   await mock({GETATEXT_API_KEY:'synthetic-getatext'},async()=>json({error:'denied'},403),async()=>{
     const account=(await providerBalances()).find(row=>row.id==='getatext')!;equal(account.status,'blocked');equal(account.balances,[]);
+  });
+});
+Deno.test('store DaisySim account is one SMSBus connection without a duplicate account or cross-domain key reuse',async()=>{
+  const requests:string[]=[];
+  await mock({SMSBUS_API_KEY:'synthetic-store-daisysim-account'},async(input)=>{
+    const url=new URL(String(input));requests.push(url.hostname);
+    equal(url.hostname,'sms-bus.com');equal(url.pathname,'/api/control/get/balance');
+    return json({code:200,data:{balance:'12.50',frozen:'0'}});
+  },async()=>{
+    equal(smsProvidersConfigured(),['smsbus']);
+    const accounts=await providerBalances();
+    assert(!accounts.some(account=>account.id==='daisysim'));
+    const account=accounts.find(account=>account.id==='smsbus')!;
+    equal(account.name,'DaisySim / SMSBus');equal(account.status,'ready');equal(requests,['sms-bus.com']);
   });
 });

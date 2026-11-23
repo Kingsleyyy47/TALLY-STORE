@@ -13,11 +13,11 @@ names; never prefix supplier credentials with `VITE_`.
 | GetAText | USA OTP catalogue, allocation, completion, polling, cancellation, matching and fallback | `GETATEXT_API_KEY`; `Auth` header; current `/api/v1` endpoints |
 | DaisySMS .com | USA OTP catalogue and complete activation lifecycle | `DAISYSMS_COM_API_KEY`; a separate account from .io |
 | DaisySMS .io | USA OTP catalogue and complete activation lifecycle; legacy activation recovery retained | `DAISYSMS_IO_API_KEY`; legacy `DAISYSMS_API_KEY` remains supported |
-| DaisySim | Country/service discovery, paged quote import, exact live price/route purchase, polling, explicit refund cancellation | `DAISYSIM_API_KEY`; admin imports at most 20 service quotes per page, allowing one page per minute |
+| DaisySim direct API (legacy, optional) | Country/service discovery, paged quote import, exact live price/route purchase, polling, explicit refund cancellation | `DAISYSIM_API_KEY` only for a separately configured direct API account; hidden when absent. The store's DaisySim account uses the existing SMSBus connection below. |
 | HeroSMS | Country/service/pricing discovery, `getNumberV2`, status and cancellation through its handler API | `HEROSMS_API_KEY` or legacy `SMSACTIVATE_API_KEY`; only a confirmed USD API account is enabled with `HEROSMS_CURRENCY=USD` |
 | TextVerify | USA temporary numbers on documented `tn101` endpoints, service-key discovery, allocation, polling and rejection | `TEXTVERIFY_API_KEY`; entries without a usable service key are excluded |
-| SMSBus OTP | Country/project discovery, fresh prices, allocation, polling and cancellation | `SMSBUS_API_KEY`; fixed documented OTP origin |
-| SMSBus rentals | Areas, monthly pricing, purchase, renewal, latest/history SMS, cancellation and linked refund | `SMSBUS_API_KEY`, `SMS_RENTALS_ENABLED=true`; separate documented rental origin; supplier prices are cents |
+| DaisySim / SMSBus OTP | Country/project discovery, fresh prices, allocation, polling and cancellation | Existing `SMSBUS_API_KEY`; one account, switch and delivery history; fixed documented OTP origin |
+| DaisySim / SMSBus rentals | Areas, monthly pricing, purchase, renewal, latest/history SMS, cancellation and linked refund | Same `SMSBUS_API_KEY`, `SMS_RENTALS_ENABLED=true`; separate documented rental origin; supplier prices are cents |
 | PVACodes | Configuration slot and explicit blocked status | Private endpoint documentation is still required. No guessed API requests are sent. |
 | Lord of Panels | Catalogue sync, orders, status and matched fallback with BulkFollows | `LORDOFPANELS_API_KEY` or legacy `SMM_PANEL_API_KEY`; USD panel account |
 | BulkFollows | Catalogue sync, orders, status and matched fallback with Lord of Panels | `BULKFOLLOWS_API_KEY`; USD panel account |

@@ -12,6 +12,7 @@ import {
 import { getNgnUsdRate } from "../_shared/exchange-rate.ts";
 import { liveSmmCatalogue, refreshSmmService, publicSmmService } from '../_shared/smm-live-catalog.ts';
 import { smmProviderCatalogue } from '../_shared/smm-provider-router.ts';
+import { isVisibleProvider, SMSBUS_DISPLAY_NAME } from '../_shared/provider-display.ts';
 const serve = Deno.serve;
 const headers = {
   "Access-Control-Allow-Origin": "*",
@@ -145,7 +146,7 @@ serve(async (req) => {
       },
       {
         id: "daisysim",
-        name: "DaisySim",
+        name: "DaisySim direct API (legacy)",
         configured: sms.includes("daisysim"),
         keys: ["DAISYSIM_API_KEY"],
         docs: "https://daisysim.com/doc",
@@ -171,10 +172,11 @@ serve(async (req) => {
       },
       {
         id: "smsbus",
-        name: "SMSBus OTP and rentals",
+        name: `${SMSBUS_DISPLAY_NAME} OTP and rentals`,
         configured: sms.includes("smsbus"),
         keys: ["SMSBUS_API_KEY", "SMS_RENTALS_ENABLED"],
         docs: "https://sms-bus.com/docs/",
+        note: "Your DaisySim account uses this SMSBus connection. One account balance and SMS provider switch.",
       },
       {
         id: "pvacodes",
@@ -242,7 +244,7 @@ serve(async (req) => {
         docs: "https://www.fragmentapi.app/openapi.json",
       },
     ];
-    return json({ success: true, data: providers });
+    return json({ success: true, data: providers.filter(provider=>isVisibleProvider(provider.id,provider.configured)) });
   } catch {
     return json({
       success: false,

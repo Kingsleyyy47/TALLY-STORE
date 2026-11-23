@@ -116,7 +116,7 @@ Deno.serve(async (req) => {
         "started_at,finished_at,status,stats",
       ).order("started_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
-    const sms = SMS_PROVIDER_IDS.map((provider) => {
+    const sms = SMS_PROVIDER_IDS.filter(provider=>accounts.some(account=>account.id===provider)).map((provider) => {
       const account = accounts.find((row) => row.id === provider)!;
       const metrics = state.metrics.filter((row) => row.provider === provider);
       const delivered = metrics.reduce(

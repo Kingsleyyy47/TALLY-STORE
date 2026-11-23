@@ -78,6 +78,12 @@ service/price/limits before accepting an order.
 - Scheduled function authentication and anonymous denial were tested live.
   No paid supplier purchase or customer financial write was used for testing.
 
-Remaining account prerequisites include keys for DaisySMS.com, DaisySim, Kora and
+The owner confirmed the store's DaisySim account is its existing SMSBus connection.
+Dashboards display this as **DaisySim / SMSBus**, with one balance, switch and
+delivery history under the existing `smsbus` ID. No additional DaisySim key is
+required. The old direct DaisySim adapter stays hidden unless explicitly configured
+with a separate legacy credential; SMSBus credentials are never sent to that API.
+
+Remaining account prerequisites include keys for DaisySMS.com, Kora and
 PVACodes. PVACodes still requires private endpoint documentation. Missing keys,
 provider refusals and unsupported balance endpoints are visible in the dashboard.

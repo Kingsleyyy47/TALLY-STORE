@@ -120,13 +120,13 @@ export default function ProviderIntegrations() {
         >
           Inspect SMS matches
         </Button>
-        <Button
+        {providers.some(provider=>provider.id==='daisysim'&&provider.configured)&&<Button
           variant="outline"
           disabled={busy || country.length !== 2}
           onClick={() => void run("sync_daisysim")}
         >
-          Sync DaisySim {cursor ? `from ${cursor}` : "country"}
-        </Button>
+          Sync legacy direct API {cursor ? `from ${cursor}` : "country"}
+        </Button>}
         <Button
           variant="outline"
           disabled={busy}

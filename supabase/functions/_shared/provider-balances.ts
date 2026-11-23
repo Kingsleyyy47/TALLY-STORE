@@ -1,6 +1,7 @@
 import { providerHttp } from "./provider-http.ts";
 import { providerRead } from "./provider-read-cache.ts";
 import { IStarProvider } from "./istar-provider.ts";
+import { isVisibleProvider, SMSBUS_DISPLAY_NAME } from "./provider-display.ts";
 const env = (name: string) => Deno.env.get(name)?.trim() || "";
 export type AccountBalance = {
   currency: string;
@@ -200,7 +201,7 @@ const definitions: Definition[] = [
   },
   {
     id: "daisysim",
-    name: "DaisySim",
+    name: "DaisySim direct API (legacy)",
     kind: "sms",
     keys: ["DAISYSIM_API_KEY"],
     read: async (key) =>
@@ -236,7 +237,7 @@ const definitions: Definition[] = [
   },
   {
     id: "smsbus",
-    name: "SMSBus",
+    name: SMSBUS_DISPLAY_NAME,
     kind: "sms",
     keys: ["SMSBUS_API_KEY"],
     read: async (key) => {
@@ -371,7 +372,8 @@ const definitions: Definition[] = [
   },
 ];
 export async function providerBalances(): Promise<ProviderBalance[]> {
-  return Promise.all(definitions.map(async (definition) => {
+  const visible=definitions.filter(definition => isVisibleProvider(definition.id,definition.keys.some(name=>!!env(name))));
+  return Promise.all(visible.map(async (definition) => {
     const key = definition.keys.map(env).find(Boolean),
       base = {
         id: definition.id,
